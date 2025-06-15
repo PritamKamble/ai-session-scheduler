@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   try {
     const session = await auth();
     const userId = session?.userId;
-    const userEmail = session?.user?.emailAddresses[0]?.emailAddress;
+    const userEmail = session?.sessionClaims?.email as string | undefined;
 
     if (!userId || userEmail !== ADMIN_EMAIL) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });

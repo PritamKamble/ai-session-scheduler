@@ -8,8 +8,10 @@ const uri = `mongodb+srv://${process.env.MONGO_USER}:${process.env.MONGO_PASS}@c
 export async function GET(req: Request) {
   try {
     const session = await auth();
+    console.log('Session:', session);
+    
     const userId = session?.userId;
-    const userEmail = session?.user?.emailAddresses[0]?.emailAddress;
+    const userEmail = session?.sessionClaims?.email as string | undefined;
 
     if (!userId || userEmail !== ADMIN_EMAIL) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
