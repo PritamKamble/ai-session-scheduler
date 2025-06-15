@@ -32,29 +32,30 @@ export async function POST(req: Request) {
 
     // Generate schedule using OpenAI
     const completion = await openai.chat.completions.create({
-      model: "gpt-4",
+      model: "gpt-4-turbo", // use turbo
       messages: [
         {
           role: "system",
           content: `You are an expert programming instructor. Create a detailed 12-week learning schedule based on the student's current skills and knowledge gaps. 
-          Format the response as a JSON object with the following structure:
-          {
-            "schedule": [
-              {
-                "week": number,
-                "topics": string[],
-                "learningObjectives": string[],
-                "resources": string[],
-                "estimatedHours": number
-              }
-            ],
-            "summary": {
-              "currentLevel": string,
-              "targetLevel": string,
-              "keyFocusAreas": string[],
-              "totalEstimatedHours": number
-            }
-          }`
+                Respond ONLY in valid JSON format, following this structure:
+
+                {
+                  "schedule": [
+                    {
+                      "week": number,
+                      "topics": string[],
+                      "learningObjectives": string[],
+                      "resources": string[],
+                      "estimatedHours": number
+                    }
+                  ],
+                  "summary": {
+                    "currentLevel": string,
+                    "targetLevel": string,
+                    "keyFocusAreas": string[],
+                    "totalEstimatedHours": number
+                  }
+                }`
         },
         {
           role: "user",
