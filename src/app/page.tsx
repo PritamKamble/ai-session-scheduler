@@ -1,6 +1,4 @@
 import { auth } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
-import Image from "next/image";
 
 export default async function Home() {
   const session = await auth();
