@@ -5,7 +5,7 @@ import { MongoClient } from 'mongodb';
 const ADMIN_EMAIL = "7276279026.pk@gmail.com";
 const uri = `mongodb+srv://${process.env.MONGO_USER}:${process.env.MONGO_PASS}@cluster0.oexqzcj.mongodb.net/${process.env.MONGO_DATABASE}?retryWrites=true&w=majority`;
 
-export async function GET(req: Request) {
+export async function GET() {
   try {
     const session = await auth();
     console.log('Session:', session);

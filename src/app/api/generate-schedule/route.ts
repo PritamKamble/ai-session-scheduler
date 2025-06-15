@@ -9,7 +9,7 @@ const openai = new OpenAI({
 
 const uri = `mongodb+srv://${process.env.MONGO_USER}:${process.env.MONGO_PASS}@cluster0.oexqzcj.mongodb.net/${process.env.MONGO_DATABASE}?retryWrites=true&w=majority`;
 
-export async function POST(req: Request) {
+export async function POST() {
   try {
     const session = await auth();
     const userId = session?.userId;

@@ -2,11 +2,31 @@
 
 import { useState, useEffect } from 'react';
 
+interface Week {
+  week: number;
+  topics: string[];
+  students?: string[]; // Only present in teaching schedule
+  learningObjectives?: string[];
+  resources?: string[];
+  estimatedHours?: number; // Only present in student schedule
+}
+
+
+interface StudentSchedule {
+  schedule: Week[];
+  summary: {
+    currentLevel: string;
+    targetLevel: string;
+    keyFocusAreas: string[];
+    totalEstimatedHours: number;
+  };
+}
+
 interface Student {
   userId: string;
   email: string;
   skills: string;
-  schedule?: any;
+  schedule?: StudentSchedule;
   createdAt: Date;
 }
 
@@ -14,7 +34,7 @@ export default function AdminDashboard() {
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
-  const [teachingSchedule, setTeachingSchedule] = useState<any>(null);
+  const [teachingSchedule, setTeachingSchedule] = useState<{ weeks: Week[] } | null>(null);
 
   useEffect(() => {
     fetchStudents();
@@ -106,7 +126,7 @@ export default function AdminDashboard() {
           <div className="mt-6">
             <h3 className="text-lg font-medium mb-4">Generated Schedule</h3>
             <div className="space-y-4">
-              {teachingSchedule.weeks.map((week: any, index: number) => (
+              {teachingSchedule.weeks.map((week: Week, index: number) => (
                 <div key={index} className="border rounded-lg p-4">
                   <h4 className="font-medium">Week {week.week}</h4>
                   <div className="mt-2">
@@ -120,7 +140,7 @@ export default function AdminDashboard() {
                   <div className="mt-2">
                     <p className="text-sm text-gray-600">Students:</p>
                     <ul className="list-disc list-inside">
-                      {week.students.map((student: string, i: number) => (
+                      {week.students?.map((student: string, i: number) => (
                         <li key={i}>{student}</li>
                       ))}
                     </ul>
@@ -141,7 +161,7 @@ export default function AdminDashboard() {
             </h3>
             {selectedStudent.schedule ? (
               <div className="space-y-4">
-                {selectedStudent.schedule.schedule.map((week: any, index: number) => (
+                {selectedStudent.schedule.schedule.map((week: Week, index: number) => (
                   <div key={index} className="border rounded-lg p-4">
                     <h4 className="font-medium">Week {week.week}</h4>
                     <div className="mt-2">
