@@ -1,5 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
 import SkillsForm from "./components/SkillsForm";
+import ScheduleDisplay from "./components/ScheduleDisplay";
 
 export default async function Home() {
   const session = await auth();
@@ -25,6 +26,9 @@ export default async function Home() {
         </p>
       </div>
       <SkillsForm />
+      <div className="mt-12">
+        <ScheduleDisplay />
+      </div>
     </div>
   );
 }
