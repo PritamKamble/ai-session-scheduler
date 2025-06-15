@@ -1,6 +1,12 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+import { Modal } from './ui/Modal';
+import { Spinner } from './ui/Spinner';
+import { Skeleton } from './ui/Skeleton';
+import { Users, Calendar, Clock, AlertCircle } from 'lucide-react';
 
 interface Week {
   week: number;
@@ -35,6 +41,7 @@ export default function AdminDashboard() {
   const [loading, setLoading] = useState(true);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [teachingSchedule, setTeachingSchedule] = useState<{ weeks: Week[] } | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchStudents();
@@ -46,7 +53,7 @@ export default function AdminDashboard() {
       const data = await response.json();
       setStudents(data.students);
     } catch (error) {
-      console.error('Error fetching students:', error);
+      setError(error instanceof Error ? error.message : 'Failed to fetch students');
     } finally {
       setLoading(false);
     }
@@ -60,77 +67,95 @@ export default function AdminDashboard() {
       const data = await response.json();
       setTeachingSchedule(data.schedule);
     } catch (error) {
-      console.error('Error generating teaching schedule:', error);
+      setError(error instanceof Error ? error.message : 'Failed to generate teaching schedule');
     }
   };
 
   if (loading) {
-    return <div>Loading...</div>;
+    return (
+      <div className="space-y-8">
+        <Card header="Students" className="animate-fadeIn">
+          <Skeleton height="200px" />
+        </Card>
+        <Card header="Teaching Schedule" className="animate-fadeIn">
+          <Skeleton height="100px" />
+        </Card>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <Card className="max-w-4xl mx-auto">
+        <div className="text-center text-red-600 dark:text-red-400 p-4">
+          <p>Error: {error}</p>
+        </div>
+      </Card>
+    );
   }
 
   return (
     <div className="space-y-8">
       {/* Student List */}
-      <div className="bg-white shadow rounded-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Students</h2>
+      <Card header="Students" className="animate-fadeIn">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
+          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
             <thead>
               <tr>
-                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-6 py-3 bg-gray-50 dark:bg-gray-800 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Email
                 </th>
-                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-6 py-3 bg-gray-50 dark:bg-gray-800 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Skills
                 </th>
-                <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-6 py-3 bg-gray-50 dark:bg-gray-800 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Actions
                 </th>
               </tr>
             </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
+            <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
               {students.map((student) => (
                 <tr key={student.userId}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 dark:text-gray-100">
                     {student.email}
                   </td>
-                  <td className="px-6 py-4 text-sm text-gray-500">
+                  <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
                     {student.skills}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <button
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                    <Button
+                      variant="secondary"
                       onClick={() => setSelectedStudent(student)}
-                      className="text-blue-600 hover:text-blue-900"
+                      leftIcon={<Calendar className="h-4 w-4" />}
                     >
                       View Schedule
-                    </button>
+                    </Button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-      </div>
+      </Card>
 
       {/* Teaching Schedule Generation */}
-      <div className="bg-white shadow rounded-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Teaching Schedule</h2>
-        <button
+      <Card header="Teaching Schedule" className="animate-fadeIn">
+        <Button
+          variant="primary"
           onClick={generateTeachingSchedule}
-          className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+          leftIcon={<Clock className="h-5 w-5" />}
         >
           Generate Teaching Schedule
-        </button>
+        </Button>
 
         {teachingSchedule && (
           <div className="mt-6">
             <h3 className="text-lg font-medium mb-4">Generated Schedule</h3>
             <div className="space-y-4">
               {teachingSchedule.weeks.map((week: Week, index: number) => (
-                <div key={index} className="border rounded-lg p-4">
-                  <h4 className="font-medium">Week {week.week}</h4>
+                <Card key={index} header={`Week ${week.week}`} className="animate-scaleIn">
                   <div className="mt-2">
-                    <p className="text-sm text-gray-600">Topics:</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Topics:</p>
                     <ul className="list-disc list-inside">
                       {week.topics.map((topic: string, i: number) => (
                         <li key={i}>{topic}</li>
@@ -138,54 +163,46 @@ export default function AdminDashboard() {
                     </ul>
                   </div>
                   <div className="mt-2">
-                    <p className="text-sm text-gray-600">Students:</p>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Students:</p>
                     <ul className="list-disc list-inside">
                       {week.students?.map((student: string, i: number) => (
                         <li key={i}>{student}</li>
                       ))}
                     </ul>
                   </div>
-                </div>
+                </Card>
               ))}
             </div>
           </div>
         )}
-      </div>
+      </Card>
 
       {/* Student Schedule Modal */}
       {selectedStudent && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-          <div className="bg-white rounded-lg p-6 max-w-2xl w-full">
-            <h3 className="text-xl font-semibold mb-4">
-              Schedule for {selectedStudent.email}
-            </h3>
-            {selectedStudent.schedule ? (
-              <div className="space-y-4">
-                {selectedStudent.schedule.schedule.map((week: Week, index: number) => (
-                  <div key={index} className="border rounded-lg p-4">
-                    <h4 className="font-medium">Week {week.week}</h4>
-                    <div className="mt-2">
-                      <p className="text-sm text-gray-600">Topics:</p>
-                      <ul className="list-disc list-inside">
-                        {week.topics.map((topic: string, i: number) => (
-                          <li key={i}>{topic}</li>
-                        ))}
-                      </ul>
-                    </div>
+        <Modal
+          open={!!selectedStudent}
+          onClose={() => setSelectedStudent(null)}
+          title={`Schedule for ${selectedStudent.email}`}
+        >
+          {selectedStudent.schedule ? (
+            <div className="space-y-4">
+              {selectedStudent.schedule.schedule.map((week: Week, index: number) => (
+                <Card key={index} header={`Week ${week.week}`} className="animate-scaleIn">
+                  <div className="mt-2">
+                    <p className="text-sm text-gray-600 dark:text-gray-400">Topics:</p>
+                    <ul className="list-disc list-inside">
+                      {week.topics.map((topic: string, i: number) => (
+                        <li key={i}>{topic}</li>
+                      ))}
+                    </ul>
                   </div>
-                ))}
-              </div>
-            ) : (
-              <p>No schedule generated yet.</p>
-            )}
-            <button
-              onClick={() => setSelectedStudent(null)}
-              className="mt-4 bg-gray-200 text-gray-800 px-4 py-2 rounded-md hover:bg-gray-300"
-            >
-              Close
-            </button>
-          </div>
-        </div>
+                </Card>
+              ))}
+            </div>
+          ) : (
+            <p>No schedule generated yet.</p>
+          )}
+        </Modal>
       )}
     </div>
   );
