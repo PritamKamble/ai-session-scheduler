@@ -59,8 +59,6 @@ const Page = () => {
                     const data = await response.json()
                     console.log('User synced:', data)
                     
-                    // Load initial sessions based on role
-                    loadInitialSessions(userRole)
                     
                 } catch (error) {
                     console.error('Sync failed:', error)
@@ -76,17 +74,7 @@ const Page = () => {
         syncUser()
     }, [isLoaded, isSignedIn, user])
 
-    const loadInitialSessions = async (userRole) => {
-        try {
-            const response = await fetch(`/api/sessions?role=${userRole}&userId=${user.id}`)
-            if (response.ok) {
-                const sessions = await response.json()
-                // Update your sessions state here
-            }
-        } catch (error) {
-            console.error('Failed to load sessions:', error)
-        }
-    }
+    
 
     const handleSubmit = async (e) => {
         e.preventDefault()

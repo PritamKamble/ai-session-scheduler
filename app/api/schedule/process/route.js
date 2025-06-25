@@ -3,7 +3,6 @@ import { Pinecone } from '@pinecone-database/pinecone';
 import { User } from '@/models/user';
 import { Session } from '@/models/session';
 import { Context } from '@/models/context';
-import mongoose from 'mongoose';
 import { NextResponse } from 'next/server';
 import connectDB from '@/config/db';
 

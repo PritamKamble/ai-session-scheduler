@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
 
-const MONGODB_URI = `mongodb+srv://akshay:${process.env.MONGO_PASS}@linkcodeagent.0z2jgs8.mongodb.net/?retryWrites=true&w=majority&appName=linkcodeagent`;
+const MONGODB_URI = `mongodb+srv://${process.env.MONGO_USER}:${process.env.MONGO_PASS}@cluster0.oexqzcj.mongodb.net/${process.env.MONGO_DATABASE}?retryWrites=true&w=majority`;
 
 if (!MONGODB_URI) {
   throw new Error(

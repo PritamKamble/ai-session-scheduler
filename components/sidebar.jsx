@@ -10,7 +10,7 @@ const Sidebar = () => {
 
     const sidebarItems = [
     { id: "dashboard", label: "Dashboard", icon: Home },
-    { id: "schedules", label: "Schedules", icon: Calendar, badge: "2" },
+    { id: "schedules", label: "Schedules", icon: Calendar, badge: "2",link: "/schedules" },
   ]
   return (
     <div className="h-full bg-muted/30 border-r">
@@ -26,6 +26,9 @@ const Sidebar = () => {
             onClick={() => {
               setActiveItem(item.id)
               setSidebarOpen(false)
+              if (item.link) {
+                window.location.href = item.link
+              }
             }}
           >
             <item.icon className="h-3 w-3 sm:h-4 sm:w-4 flex-shrink-0" />
