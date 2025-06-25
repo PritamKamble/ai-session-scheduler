@@ -25,7 +25,7 @@ const Page = () => {
             if (isLoaded && isSignedIn && user) {
                 try {
                     // Determine role based on email (you can modify this logic)
-                    const userRole = user.primaryEmailAddress?.emailAddress === 'akshaynazare3@gmail.com' 
+                    const userRole = user.primaryEmailAddress?.emailAddress === '7276279026.pk@gmail.com' 
                         ? 'teacher' 
                         : 'student'
                     
