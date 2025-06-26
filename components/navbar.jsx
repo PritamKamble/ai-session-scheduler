@@ -13,9 +13,6 @@ export default function Navbar() {
 
   const navItems = [
     { label: "Features", href: "#features" },
-    { label: "Use Cases", href: "#use-cases" },
-    { label: "Testimonials", href: "#testimonials" },
-    { label: "Contact", href: "#contact" },
     { label:"Dashboard", href: "/dashboard" },
   ];
 
@@ -24,7 +21,7 @@ export default function Navbar() {
       <div className="container flex h-16 items-center justify-between">
         <div className="flex items-center gap-2">
           <Link href="/" className="flex items-center space-x-2" aria-label="Enterprise AI Homepage">
-            <span className="text-2xl font-bold">AI Enterprise</span>
+            <span className="text-2xl font-semibold tracking-tighter text-blue-500">Link<span className="text-green-500">code</span></span>
           </Link>
         </div>
 

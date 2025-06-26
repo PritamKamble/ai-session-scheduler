@@ -8,8 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Sidebar } from "@/src/app/components/ui/Sidebar"
-import Link from "next/link"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
 
 const ModernSessionsPage = () => {
   const [sessions, setSessions] = useState([])
@@ -17,6 +17,7 @@ const ModernSessionsPage = () => {
   const [filter, setFilter] = useState("all")
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedDate, setSelectedDate] = useState("")
+  const router = useRouter()
 
   useEffect(() => {
     fetchSessions()
@@ -44,42 +45,61 @@ const ModernSessionsPage = () => {
       setSessions(data.data || [])
     } catch (error) {
       console.error("Error fetching sessions:", error)
+      toast.error("Failed to load sessions")
     } finally {
       setLoading(false)
     }
   }
 
-  const getStatusVariant = (status) => {
-    switch (status) {
-      case "pending":
-        return "secondary"
-      case "scheduled":
-        return "default"
-      case "completed":
-        return "outline"
-      case "cancelled":
-        return "destructive"
-      default:
-        return "secondary"
+  const handleCreateSession = () => {
+    router.push("/sessions/create")
+  }
+
+  const handleViewDetails = (sessionId) => {
+    router.push(`/sessions/${sessionId}`)
+  }
+
+  const handleEditSession = (sessionId) => {
+    router.push(`/sessions/${sessionId}/edit`)
+  }
+
+  const handleDeleteSession = async (sessionId) => {
+    try {
+      const response = await fetch(`/api/sessions?sessionId=${sessionId}`, {
+        method: "DELETE"
+      })
+      
+      if (!response.ok) {
+        throw new Error("Failed to delete session")
+      }
+      
+      toast.success("Session deleted successfully")
+      fetchSessions() // Refresh the list
+    } catch (error) {
+      console.error("Error deleting session:", error)
+      toast.error("Failed to delete session")
     }
   }
 
   const getStatusColor = (status) => {
     switch (status) {
       case "pending":
-        return "text-amber-600 bg-amber-50 border-amber-200"
+        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800"
       case "scheduled":
-        return "text-blue-600 bg-blue-50 border-blue-200"
+        return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800"
       case "completed":
-        return "text-emerald-600 bg-emerald-50 border-emerald-200"
+        return "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800"
       case "cancelled":
-        return "text-red-600 bg-red-50 border-red-200"
+        return "bg-red-50 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800"
+      case "coordinated":
+        return "bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950 dark:text-purple-300 dark:border-purple-800"
       default:
-        return "text-gray-600 bg-gray-50 border-gray-200"
+        return "bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-950 dark:text-gray-300 dark:border-gray-800"
     }
   }
 
   const formatDate = (dateString) => {
+    if (!dateString) return "No date set"
     return new Date(dateString).toLocaleDateString("en-US", {
       weekday: "short",
       year: "numeric",
@@ -88,41 +108,51 @@ const ModernSessionsPage = () => {
     })
   }
 
+  const formatTimeSlot = (session) => {
+    if (!session.schedule) return "No time set"
+    return `${session.schedule.startTime || ''} - ${session.schedule.endTime || ''}`
+  }
+
   const filteredSessions = sessions.filter(
     (session) =>
       session.topic.toLowerCase().includes(searchTerm.toLowerCase()) ||
       session.teacherId?.name?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
-
+  ).filter((session) => {
+    if (filter === "all") return true
+    if (filter === "coordinated") return session.status === "coordinated"
+    return session.status === filter
+  })
+  
+  // Update stats to include coordinated status if needed
   const stats = {
     total: sessions.length,
     pending: sessions.filter((s) => s.status === "pending").length,
     scheduled: sessions.filter((s) => s.status === "scheduled").length,
     completed: sessions.filter((s) => s.status === "completed").length,
     cancelled: sessions.filter((s) => s.status === "cancelled").length,
+    coordinated: sessions.filter((s) => s.status === "coordinated").length,
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
-        <Sidebar/>
+    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
       {/* Header */}
-      <div className="border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-xl sticky top-0 z-50">
+      <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-8">
           <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
             <div className="flex items-center gap-4">
-              <div className="p-3 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-2xl shadow-lg">
-                <Calendar className="w-7 h-7 text-white" />
+              <div className="p-3 bg-primary rounded-2xl shadow-lg">
+                <Calendar className="w-7 h-7 text-primary-foreground" />
               </div>
               <div>
-                <h1 className="text-4xl font-semibold text-white mb-2 tracking-tighter ">Session Management</h1>
-                <p className="text-slate-400 text-lg tracking-tighter">Organize and track your learning sessions</p>
-                <Link
-                href={"/dashboard"}>
-                <p className="text-zinc-600 tracking-tighter font-medium text-md hover:text-green-500 hover:cursor-pointer">Back to Dash</p>
-                </Link>
+                <h1 className="text-4xl font-bold text-foreground mb-2">Session Management</h1>
+                <p className="text-muted-foreground text-lg">Organize and track your learning sessions</p>
               </div>
             </div>
 
+            <Button size="lg" className="shadow-lg" onClick={handleCreateSession}>
+              <Plus className="w-5 h-5 mr-2" />
+              Create Session
+            </Button>
           </div>
         </div>
       </div>
@@ -130,79 +160,80 @@ const ModernSessionsPage = () => {
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Stats Cards */}
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-          <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm">
+          <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="text-center">
-                <div className="text-3xl font-bold text-white mb-1">{stats.total}</div>
-                <div className="text-slate-400 text-sm">Total Sessions</div>
+                <div className="text-3xl font-bold text-foreground mb-1">{stats.total}</div>
+                <div className="text-muted-foreground text-sm">Total Sessions</div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm">
+          <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="text-center">
-                <div className="text-3xl font-bold text-amber-400 mb-1">{stats.pending}</div>
-                <div className="text-slate-400 text-sm">Pending</div>
+                <div className="text-3xl font-bold text-amber-600 dark:text-amber-400 mb-1">{stats.pending}</div>
+                <div className="text-muted-foreground text-sm">Pending</div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm">
+          <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="text-center">
-                <div className="text-3xl font-bold text-blue-400 mb-1">{stats.scheduled}</div>
-                <div className="text-slate-400 text-sm">Scheduled</div>
+                <div className="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-1">{stats.scheduled}</div>
+                <div className="text-muted-foreground text-sm">Scheduled</div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm">
+          <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="text-center">
-                <div className="text-3xl font-bold text-emerald-400 mb-1">{stats.completed}</div>
-                <div className="text-slate-400 text-sm">Completed</div>
+                <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400 mb-1">{stats.completed}</div>
+                <div className="text-muted-foreground text-sm">Completed</div>
               </div>
             </CardContent>
           </Card>
 
-          <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm">
+          <Card className="hover:shadow-lg transition-shadow">
             <CardContent className="p-6">
               <div className="text-center">
-                <div className="text-3xl font-bold text-red-400 mb-1">{stats.cancelled}</div>
-                <div className="text-slate-400 text-sm">Cancelled</div>
+                <div className="text-3xl font-bold text-red-600 dark:text-red-400 mb-1">{stats.cancelled}</div>
+                <div className="text-muted-foreground text-sm">Cancelled</div>
               </div>
             </CardContent>
           </Card>
         </div>
 
         {/* Filters and Search */}
-        <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm mb-8">
+        <Card className="mb-8 shadow-sm">
           <CardContent className="p-6">
             <div className="flex flex-col lg:flex-row gap-4">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-5 h-5" />
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-5 h-5" />
                 <Input
                   type="text"
                   placeholder="Search sessions by topic or instructor..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 bg-slate-700/50 border-slate-600 text-white placeholder:text-slate-400 focus:border-blue-500 focus:ring-blue-500/20"
+                  className="pl-10"
                 />
               </div>
 
               <div className="flex gap-4">
                 <Select value={filter} onValueChange={setFilter}>
-                  <SelectTrigger className="w-48 bg-slate-700/50 border-slate-600 text-white">
-                    <Filter className="w-4 h-4 mr-2 text-slate-400" />
+                  <SelectTrigger className="w-48">
+                    <Filter className="w-4 h-4 mr-2 text-muted-foreground" />
                     <SelectValue placeholder="Filter by status" />
                   </SelectTrigger>
-                  <SelectContent className="bg-slate-800 border-slate-700">
+                  <SelectContent>
                     <SelectItem value="all">All Status</SelectItem>
                     <SelectItem value="pending">Pending</SelectItem>
                     <SelectItem value="scheduled">Scheduled</SelectItem>
                     <SelectItem value="completed">Completed</SelectItem>
                     <SelectItem value="cancelled">Cancelled</SelectItem>
+                    <SelectItem value="coordinated">Coordinated</SelectItem>
                   </SelectContent>
                 </Select>
 
@@ -210,7 +241,7 @@ const ModernSessionsPage = () => {
                   type="date"
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="w-48 bg-slate-700/50 border-slate-600 text-white focus:border-blue-500 focus:ring-blue-500/20"
+                  className="w-48"
                 />
               </div>
             </div>
@@ -221,21 +252,21 @@ const ModernSessionsPage = () => {
         {loading ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             {[...Array(6)].map((_, i) => (
-              <Card key={i} className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm animate-pulse">
+              <Card key={i} className="animate-pulse">
                 <CardContent className="p-6">
-                  <div className="h-6 bg-slate-700 rounded mb-4"></div>
-                  <div className="h-4 bg-slate-700 rounded w-3/4 mb-2"></div>
-                  <div className="h-4 bg-slate-700 rounded w-1/2"></div>
+                  <div className="h-6 bg-muted rounded mb-4"></div>
+                  <div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
+                  <div className="h-4 bg-muted rounded w-1/2"></div>
                 </CardContent>
               </Card>
             ))}
           </div>
         ) : filteredSessions.length === 0 ? (
-          <Card className="bg-slate-800/50 border-slate-700/50 backdrop-blur-sm">
+          <Card>
             <CardContent className="p-12 text-center">
-              <Calendar className="w-16 h-16 text-slate-600 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold text-white mb-2">No sessions found</h3>
-              <p className="text-slate-400">Try adjusting your filters or create a new session.</p>
+              <Calendar className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-xl font-semibold text-foreground mb-2">No sessions found</h3>
+              <p className="text-muted-foreground">Try adjusting your filters or create a new session.</p>
             </CardContent>
           </Card>
         ) : (
@@ -243,35 +274,38 @@ const ModernSessionsPage = () => {
             {filteredSessions.map((session) => (
               <Card
                 key={session._id}
-                className="group bg-slate-800/50 border-slate-700/50 backdrop-blur-sm hover:bg-slate-800/70 hover:border-slate-600/50 transition-all duration-300 hover:shadow-2xl hover:shadow-blue-500/10"
+                className="group hover:shadow-xl transition-all duration-300 hover:scale-[1.02] border-2 hover:border-primary/20"
               >
                 <CardHeader className="pb-4">
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <h3 className="text-xl font-semibold text-white mb-3 group-hover:text-blue-400 transition-colors">
+                      <h3 className="text-xl font-semibold text-foreground mb-3 group-hover:text-primary transition-colors">
                         {session.topic}
                       </h3>
-                      <Badge className={`${getStatusColor(session.status)} border`}>
+                      <Badge className={`${getStatusColor(session.status)} border font-medium`}>
                         {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
                       </Badge>
                     </div>
 
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="sm" className="text-slate-400 hover:text-white">
+                        <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground">
                           <MoreHorizontal className="w-4 h-4" />
                         </Button>
                       </DropdownMenuTrigger>
-                      <DropdownMenuContent className="bg-slate-800 border-slate-700">
-                        <DropdownMenuItem className="text-slate-300 hover:text-white">
+                      <DropdownMenuContent>
+                        <DropdownMenuItem onClick={() => handleViewDetails(session._id)}>
                           <Eye className="w-4 h-4 mr-2" />
                           View Details
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-slate-300 hover:text-white">
+                        <DropdownMenuItem onClick={() => handleEditSession(session._id)}>
                           <Edit className="w-4 h-4 mr-2" />
                           Edit Session
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-red-400 hover:text-red-300">
+                        <DropdownMenuItem 
+                          className="text-destructive"
+                          onClick={() => handleDeleteSession(session._id)}
+                        >
                           <Trash2 className="w-4 h-4 mr-2" />
                           Delete
                         </DropdownMenuItem>
@@ -281,42 +315,42 @@ const ModernSessionsPage = () => {
                 </CardHeader>
 
                 <CardContent className="pt-0">
-                  {session.description && (
-                    <p className="text-slate-400 text-sm mb-6 line-clamp-2">{session.description}</p>
+                  {session.notes && (
+                    <p className="text-muted-foreground text-sm mb-6 line-clamp-2">{session.notes}</p>
                   )}
 
                   <div className="space-y-4 mb-6">
-                    <div className="flex items-center gap-3 text-slate-300">
-                      <Calendar className="w-4 h-4 text-blue-400" />
-                      <span className="text-sm">{formatDate(session.schedule.date)}</span>
+                    <div className="flex items-center gap-3 text-foreground">
+                      <Calendar className="w-4 h-4 text-primary" />
+                      <span className="text-sm">{formatDate(session.schedule?.date)}</span>
                     </div>
 
-                    <div className="flex items-center gap-3 text-slate-300">
-                      <Clock className="w-4 h-4 text-blue-400" />
+                    <div className="flex items-center gap-3 text-foreground">
+                      <Clock className="w-4 h-4 text-primary" />
                       <span className="text-sm">
-                        {session.schedule.startTime} - {session.schedule.endTime}
+                        {formatTimeSlot(session)}
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-3 text-slate-300">
-                      <Users className="w-4 h-4 text-blue-400" />
+                    <div className="flex items-center gap-3 text-foreground">
+                      <Users className="w-4 h-4 text-primary" />
                       <span className="text-sm">
                         {session.studentIds?.length || 0} student{session.studentIds?.length !== 1 ? "s" : ""}
                       </span>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-3 p-4 bg-slate-700/30 rounded-xl border border-slate-600/30">
-                    <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-indigo-600 rounded-full flex items-center justify-center">
-                      <span className="text-white text-sm font-semibold">
+                  <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-xl border">
+                    <div className="w-10 h-10 bg-primary rounded-full flex items-center justify-center">
+                      <span className="text-primary-foreground text-sm font-semibold">
                         {session.teacherId?.name?.charAt(0) || "T"}
                       </span>
                     </div>
                     <div>
-                      <p className="text-white font-medium text-sm">
+                      <p className="text-foreground font-medium text-sm">
                         {session.teacherId?.name || "Unknown Instructor"}
                       </p>
-                      <p className="text-slate-400 text-xs">Lead Instructor</p>
+                      <p className="text-muted-foreground text-xs">Lead Instructor</p>
                     </div>
                   </div>
                 </CardContent>
