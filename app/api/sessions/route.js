@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { Session } from '@/models/session';
 import { User } from '@/models/user';
 import connectDB from '@/config/db';
+import mongoose from 'mongoose';
 
 export async function GET(request) {
   try {
@@ -18,28 +19,65 @@ export async function GET(request) {
     const userRole = searchParams.get('userRole');
     const includeAvailability = searchParams.get('includeAvailability') === 'true';
     
+    console.log('=== SESSION FETCH DEBUG ===');
+    console.log('Query params:', { status, teacherId, studentId, date, topic, userId, userRole, includeAvailability });
+    
     // Build base query object
     let query = {};
     
-    // Helper function to find user's MongoDB _id from Clerk ID
+    // Helper function to check if a string is a valid ObjectId
+    const isValidObjectId = (id) => {
+      return mongoose.Types.ObjectId.isValid(id) && 
+             (String(new mongoose.Types.ObjectId(id)) === id);
+    };
+    
+    // Helper function to find user's MongoDB _id from Clerk ID or ObjectId
     const findUserMongoId = async (userIdentifier) => {
-      const user = await User.findOne({
-        $or: [
-          { _id: userIdentifier },
-          { clerkId: userIdentifier }
-        ]
-      }).select('_id');
-      return user?._id;
+      if (!userIdentifier) return null;
+      
+      console.log('Finding user for identifier:', userIdentifier);
+      
+      let searchQuery;
+      if (isValidObjectId(userIdentifier)) {
+        // If it's a valid ObjectId, search by both _id and clerkId
+        searchQuery = {
+          $or: [
+            { _id: userIdentifier },
+            { clerkId: userIdentifier }
+          ]
+        };
+      } else {
+        // If it's not a valid ObjectId, only search by clerkId
+        searchQuery = { clerkId: userIdentifier };
+      }
+      
+      console.log('User search query:', JSON.stringify(searchQuery, null, 2));
+      const user = await User.findOne(searchQuery).select('_id role clerkId name email');
+      console.log('User search result:', user);
+      return user;
     };
     
     // Add access control based on user role
     if (userRole === 'teacher' && userId) {
       // Teachers can only see their own sessions
-      const teacherMongoId = await findUserMongoId(userId);
-      if (teacherMongoId) {
-        query.teacherId = teacherMongoId;
+      const teacherUser = await findUserMongoId(userId);
+      console.log('Teacher lookup - userId:', userId, 'found user:', teacherUser);
+      
+      if (teacherUser) {
+        // Verify the user is actually a teacher
+        if (teacherUser.role !== 'teacher') {
+          console.log('User is not a teacher, role:', teacherUser.role);
+          return NextResponse.json({
+            success: false,
+            error: 'Access denied - user is not a teacher',
+            data: []
+          }, { status: 403 });
+        }
+        
+        query.teacherId = teacherUser._id;
+        console.log('Teacher query set:', { teacherId: teacherUser._id });
       } else {
-        // If user not found, return empty result
+        console.log('Teacher not found, returning empty result');
         return NextResponse.json({
           success: true,
           data: [],
@@ -49,11 +87,24 @@ export async function GET(request) {
       }
     } else if (userRole === 'student' && userId) {
       // Students can only see sessions they've joined
-      const studentMongoId = await findUserMongoId(userId);
-      if (studentMongoId) {
-        query.studentIds = { $in: [studentMongoId] };
+      const studentUser = await findUserMongoId(userId);
+      console.log('Student lookup - userId:', userId, 'found user:', studentUser);
+      
+      if (studentUser) {
+        // Verify the user is actually a student
+        if (studentUser.role !== 'student') {
+          console.log('User is not a student, role:', studentUser.role);
+          return NextResponse.json({
+            success: false,
+            error: 'Access denied - user is not a student',
+            data: []
+          }, { status: 403 });
+        }
+        
+        query.studentIds = { $in: [studentUser._id] };
+        console.log('Student query set:', { studentIds: { $in: [studentUser._id] } });
       } else {
-        // If user not found, return empty result
+        console.log('Student not found, returning empty result');
         return NextResponse.json({
           success: true,
           data: [],
@@ -63,30 +114,34 @@ export async function GET(request) {
       }
     }
     
-    // Add additional filters
+    // Add additional filters only if no role-based restrictions or if admin
     if (status) {
       const statuses = status.split(',');
       query.status = statuses.length > 1 ? { $in: statuses } : status;
+      console.log('Status filter added:', query.status);
     }
     
     if (teacherId && (userRole === 'admin' || !userRole)) {
       // Only allow teacherId filter for admins or when no role is specified
-      const teacherMongoId = await findUserMongoId(teacherId);
-      if (teacherMongoId) {
-        query.teacherId = teacherMongoId;
+      const teacherUser = await findUserMongoId(teacherId);
+      if (teacherUser) {
+        query.teacherId = teacherUser._id;
+        console.log('Additional teacherId filter added:', teacherUser._id);
       }
     }
     
     if (studentId && (userRole === 'admin' || !userRole)) {
       // Only allow studentId filter for admins or when no role is specified
-      const studentMongoId = await findUserMongoId(studentId);
-      if (studentMongoId) {
-        query.studentIds = { $in: [studentMongoId] };
+      const studentUser = await findUserMongoId(studentId);
+      if (studentUser) {
+        query.studentIds = { $in: [studentUser._id] };
+        console.log('Additional studentId filter added:', studentUser._id);
       }
     }
     
     if (topic) {
       query.topic = { $regex: topic, $options: 'i' };
+      console.log('Topic filter added:', query.topic);
     }
     
     if (date) {
@@ -99,23 +154,31 @@ export async function GET(request) {
         $gte: startOfDay,
         $lte: endOfDay
       };
+      console.log('Date filter added:', query['schedule.date']);
     }
     
-    // Special query for user-specific sessions (both as teacher and student)
-    if (userId && !teacherId && !studentId && (userRole === 'admin' || !userRole)) {
-      const userMongoId = await findUserMongoId(userId);
-      if (userMongoId) {
+    // Special handling for debugging - if no role-based restrictions, show more info
+    if (!userRole && userId) {
+      console.log('No role specified, checking user:', userId);
+      const user = await findUserMongoId(userId);
+      console.log('Found user:', user);
+      
+      // Show all sessions for this user (both as teacher and student)
+      if (user) {
         query = {
-          ...query,
           $or: [
-            { teacherId: userMongoId },
-            { studentIds: { $in: [userMongoId] } }
+            { teacherId: user._id },
+            { studentIds: { $in: [user._id] } }
           ]
         };
+        console.log('User-based query (no role):', JSON.stringify(query, null, 2));
       }
     }
     
     // Build the query with population
+    console.log('=== FINAL QUERY ===');
+    console.log('Final query before database:', JSON.stringify(query, null, 2));
+    
     let sessionQuery = Session.find(query)
       .populate('teacherId', 'name email clerkId')
       .populate('studentIds', 'name email clerkId')
@@ -126,6 +189,15 @@ export async function GET(request) {
     }
     
     const sessions = await sessionQuery.lean();
+    console.log('=== QUERY RESULTS ===');
+    console.log('Sessions found:', sessions.length);
+    console.log('Sample session (first one):', sessions[0] ? {
+      _id: sessions[0]._id,
+      topic: sessions[0].topic,
+      teacherId: sessions[0].teacherId,
+      status: sessions[0].status,
+      schedule: sessions[0].schedule
+    } : 'No sessions found');
     
     // Transform sessions to include computed fields
     const transformedSessions = sessions.map(session => {
@@ -194,6 +266,10 @@ export async function GET(request) {
       }
     });
     
+    console.log('=== RESPONSE SUMMARY ===');
+    console.log('Returning', transformedSessions.length, 'sessions');
+    console.log('Aggregation:', aggregation);
+    
     return NextResponse.json({
       success: true,
       data: transformedSessions,
@@ -249,13 +325,26 @@ export async function POST(request) {
       );
     }
     
+    // Helper function to check if a string is a valid ObjectId
+    const isValidObjectId = (id) => {
+      return mongoose.Types.ObjectId.isValid(id) && 
+             (String(new mongoose.Types.ObjectId(id)) === id);
+    };
+    
     // Verify teacher exists and get MongoDB _id
-    const teacher = await User.findOne({ 
-      $or: [
-        { _id: teacherId },
-        { clerkId: teacherId }
-      ]
-    });
+    let teacherQuery;
+    if (isValidObjectId(teacherId)) {
+      teacherQuery = {
+        $or: [
+          { _id: teacherId },
+          { clerkId: teacherId }
+        ]
+      };
+    } else {
+      teacherQuery = { clerkId: teacherId };
+    }
+    
+    const teacher = await User.findOne(teacherQuery);
     
     if (!teacher) {
       return NextResponse.json(
@@ -347,6 +436,12 @@ export async function PUT(request) {
       );
     }
     
+    // Helper function to check if a string is a valid ObjectId
+    const isValidObjectId = (id) => {
+      return mongoose.Types.ObjectId.isValid(id) && 
+             (String(new mongoose.Types.ObjectId(id)) === id);
+    };
+    
     // Process dates in update data
     if (updateData.schedule?.date) {
       updateData.schedule.date = new Date(updateData.schedule.date);
@@ -373,12 +468,19 @@ export async function PUT(request) {
     if (updateData.studentIds) {
       const studentMongoIds = [];
       for (const studentId of updateData.studentIds) {
-        const student = await User.findOne({
-          $or: [
-            { _id: studentId },
-            { clerkId: studentId }
-          ]
-        }).select('_id');
+        let studentQuery;
+        if (isValidObjectId(studentId)) {
+          studentQuery = {
+            $or: [
+              { _id: studentId },
+              { clerkId: studentId }
+            ]
+          };
+        } else {
+          studentQuery = { clerkId: studentId };
+        }
+        
+        const student = await User.findOne(studentQuery).select('_id');
         if (student) {
           studentMongoIds.push(student._id);
         }

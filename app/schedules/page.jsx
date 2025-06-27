@@ -12,6 +12,13 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { useUser } from "@clerk/nextjs"
 import Link from "next/link"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 
 const ModernSessionsPage = () => {
   const [sessions, setSessions] = useState([])
@@ -19,14 +26,25 @@ const ModernSessionsPage = () => {
   const [filter, setFilter] = useState("all")
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedDate, setSelectedDate] = useState("")
+  const [includeAvailability, setIncludeAvailability] = useState(false)
+  const [stats, setStats] = useState({
+    total: 0,
+    pending: 0,
+    scheduled: 0,
+    completed: 0,
+    cancelled: 0,
+    upcoming: 0,
+    today: 0
+  })
+  
   const router = useRouter()
   const { isLoaded, user } = useUser()
 
   useEffect(() => {
-    if (isLoaded) {
+    if (isLoaded && user) {
       fetchSessions()
     }
-  }, [filter, selectedDate, isLoaded])
+  }, [filter, selectedDate, includeAvailability, isLoaded, user])
 
   const fetchSessions = async () => {
     try {
@@ -34,30 +52,43 @@ const ModernSessionsPage = () => {
       
       if (!user) return
       
-      // Build query parameters based on current filters
+      // Build query parameters
       const params = new URLSearchParams()
-      if (filter !== "all") {
-        params.append("status", filter)
-      }
+      if (filter !== "all") params.append("status", filter)
       if (selectedDate) {
-        params.append("date", selectedDate)
+        const formattedDate = new Date(selectedDate).toISOString().split('T')[0]
+        params.append("date", formattedDate)
       }
+      if (searchTerm) params.append("topic", searchTerm)
+      if (includeAvailability) params.append("includeAvailability", "true")
       
-      // Add user role and ID for access control
-      const userRole = user.publicMetadata.role || "student"
+      // Add user context
+      const userRole = user.publicMetadata?.role
       params.append("userId", user.id)
       params.append("userRole", userRole)
       
       const response = await fetch(`/api/sessions?${params.toString()}`)
       if (!response.ok) {
-        throw new Error("Failed to fetch sessions")
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to fetch sessions")
       }
       
       const data = await response.json()
       setSessions(data.data || [])
+      
+      // Update stats from API aggregation data
+      setStats({
+        total: data.aggregation?.total || 0,
+        pending: data.aggregation?.byStatus?.pending || 0,
+        scheduled: data.aggregation?.byStatus?.scheduled || 0,
+        completed: data.aggregation?.byStatus?.completed || 0,
+        cancelled: data.aggregation?.byStatus?.cancelled || 0,
+        upcoming: data.aggregation?.upcomingSessions || 0,
+        today: data.aggregation?.todaySessions || 0
+      })
     } catch (error) {
       console.error("Error fetching sessions:", error)
-      toast.error("Failed to load sessions")
+      toast.error(error.message || "Failed to load sessions")
     } finally {
       setLoading(false)
     }
@@ -72,11 +103,12 @@ const ModernSessionsPage = () => {
   }
 
   const handleEditSession = async (sessionId) => {
-    // First check if user is the teacher of this session
     const session = sessions.find(s => s._id === sessionId)
     if (!session) return
     
-    if (session.teacherId._id !== user.id && session.teacherId.clerkId !== user.id) {
+    // Check if user is the teacher of this session (handles both MongoDB _id and Clerk ID)
+    if ((session.teacherId._id && session.teacherId._id.toString() !== user.id) && 
+        (session.teacherId.clerkId && session.teacherId.clerkId !== user.id)) {
       toast.error("You can only edit your own sessions")
       return
     }
@@ -89,8 +121,9 @@ const ModernSessionsPage = () => {
       const session = sessions.find(s => s._id === sessionId)
       if (!session) return
       
-      // Check if user is the teacher of this session
-      if (session.teacherId._id !== user.id && session.teacherId.clerkId !== user.id) {
+      // Check permissions (handles both MongoDB _id and Clerk ID)
+      if ((session.teacherId._id && session.teacherId._id.toString() !== user.id) && 
+          (session.teacherId.clerkId && session.teacherId.clerkId !== user.id)) {
         toast.error("You can only delete your own sessions")
         return
       }
@@ -100,14 +133,15 @@ const ModernSessionsPage = () => {
       })
       
       if (!response.ok) {
-        throw new Error("Failed to delete session")
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to delete session")
       }
       
       toast.success("Session deleted successfully")
-      fetchSessions() // Refresh the list
+      fetchSessions()
     } catch (error) {
       console.error("Error deleting session:", error)
-      toast.error("Failed to delete session")
+      toast.error(error.message || "Failed to delete session")
     }
   }
 
@@ -141,21 +175,9 @@ const ModernSessionsPage = () => {
     return `${session.schedule.startTime || ''} - ${session.schedule.endTime || ''}`
   }
 
-  const filteredSessions = sessions.filter(
-    (session) =>
-      session.topic.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      session.teacherId?.name?.toLowerCase().includes(searchTerm.toLowerCase())
-  ).filter((session) => {
-    if (filter === "all") return true
-    return session.status === filter
-  })
-  
-  const stats = {
-    total: sessions.length,
-    pending: sessions.filter((s) => s.status === "pending").length,
-    scheduled: sessions.filter((s) => s.status === "scheduled").length,
-    completed: sessions.filter((s) => s.status === "completed").length,
-    cancelled: sessions.filter((s) => s.status === "cancelled").length,
+  const handleSearch = (e) => {
+    e.preventDefault()
+    fetchSessions()
   }
 
   return (
@@ -177,8 +199,8 @@ const ModernSessionsPage = () => {
                     ? "Manage your teaching schedule" 
                     : "View your enrolled sessions"}
                 </p>
-                <Link href={"/dashboard"}>
-                <p className="text-zinc-500 lg:text-md text-sm tracking-tighter">Back to dashboard</p>
+                <Link href="/dashboard">
+                  <p className="text-zinc-500 lg:text-md text-sm tracking-tighter hover:underline">Back to dashboard</p>
                 </Link>
               </div>
             </div>
@@ -242,15 +264,42 @@ const ModernSessionsPage = () => {
           </Card>
         </div>
 
+        {/* Additional Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold text-foreground mb-1">{stats.upcoming}</div>
+                  <div className="text-muted-foreground text-sm">Upcoming Sessions</div>
+                </div>
+                <Calendar className="w-8 h-8 text-primary" />
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="hover:shadow-lg transition-shadow">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-2xl font-bold text-foreground mb-1">{stats.today}</div>
+                  <div className="text-muted-foreground text-sm">Today's Sessions</div>
+                </div>
+                <Clock className="w-8 h-8 text-primary" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
         {/* Filters and Search */}
         <Card className="mb-8 shadow-sm">
           <CardContent className="p-6">
-            <div className="flex flex-col lg:flex-row gap-4">
+            <form onSubmit={handleSearch} className="flex flex-col lg:flex-row gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-5 h-5" />
                 <Input
                   type="text"
-                  placeholder="Search sessions by topic or instructor..."
+                  placeholder="Search sessions by topic..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   className="pl-10"
@@ -278,8 +327,27 @@ const ModernSessionsPage = () => {
                   onChange={(e) => setSelectedDate(e.target.value)}
                   className="w-48"
                 />
+
+                <Button type="submit" variant="outline">
+                  Apply Filters
+                </Button>
               </div>
-            </div>
+            </form>
+
+            {user?.publicMetadata?.role === "teacher" && (
+              <div className="mt-4 flex items-center">
+                <input
+                  type="checkbox"
+                  id="includeAvailability"
+                  checked={includeAvailability}
+                  onChange={(e) => setIncludeAvailability(e.target.checked)}
+                  className="mr-2"
+                />
+                <label htmlFor="includeAvailability" className="text-sm text-muted-foreground">
+                  Include availability data
+                </label>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -287,30 +355,37 @@ const ModernSessionsPage = () => {
         {loading ? (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
             {[...Array(6)].map((_, i) => (
-              <Card key={i} className="animate-pulse">
+              <Card key={i}>
                 <CardContent className="p-6">
-                  <div className="h-6 bg-muted rounded mb-4"></div>
-                  <div className="h-4 bg-muted rounded w-3/4 mb-2"></div>
-                  <div className="h-4 bg-muted rounded w-1/2"></div>
+                  <Skeleton className="h-6 w-3/4 mb-4" />
+                  <Skeleton className="h-4 w-full mb-2" />
+                  <Skeleton className="h-4 w-1/2 mb-6" />
+                  <Skeleton className="h-10 w-full rounded-xl" />
                 </CardContent>
               </Card>
             ))}
           </div>
-        ) : filteredSessions.length === 0 ? (
+        ) : sessions.length === 0 ? (
           <Card>
             <CardContent className="p-12 text-center">
               <Calendar className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
               <h3 className="text-xl font-semibold text-foreground mb-2">No sessions found</h3>
-              <p className="text-muted-foreground">
+              <p className="text-muted-foreground mb-4">
                 {user?.publicMetadata?.role === "teacher"
                   ? "You haven't created any sessions yet."
                   : "You haven't joined any sessions yet."}
               </p>
+              {user?.publicMetadata?.role === "teacher" && (
+                <Button onClick={handleCreateSession}>
+                  <Plus className="w-4 h-4 mr-2" />
+                  Create Your First Session
+                </Button>
+              )}
             </CardContent>
           </Card>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-            {filteredSessions.map((session) => (
+            {sessions.map((session) => (
               <Card
                 key={session._id}
                 className="group hover:shadow-xl transition-all duration-300 hover:scale-[1.02] border-2 hover:border-primary/20"
@@ -344,7 +419,7 @@ const ModernSessionsPage = () => {
                               Edit Session
                             </DropdownMenuItem>
                             <DropdownMenuItem 
-                              className="text-destructive"
+                              className="text-destructive focus:text-destructive"
                               onClick={() => handleDeleteSession(session._id)}
                             >
                               <Trash2 className="w-4 h-4 mr-2" />
@@ -372,15 +447,45 @@ const ModernSessionsPage = () => {
                       <Clock className="w-4 h-4 text-primary" />
                       <span className="text-sm">
                         {formatTimeSlot(session)}
+                        {session.schedule?.timezone && (
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="ml-2 text-xs text-muted-foreground">
+                                  ({session.schedule.timezone})
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>Timezone</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
                       </span>
                     </div>
 
                     <div className="flex items-center gap-3 text-foreground">
                       <Users className="w-4 h-4 text-primary" />
                       <span className="text-sm">
-                        {session.studentIds?.length || 0} student{session.studentIds?.length !== 1 ? "s" : ""}
+                        {session.totalStudents || 0} student{session.totalStudents !== 1 ? "s" : ""}
                       </span>
                     </div>
+
+                    {includeAvailability && session.hasTeacherAvailability && (
+                      <div className="flex items-center gap-3 text-foreground">
+                        <Badge variant="outline" className="text-xs">
+                          {session.availabilityOptions?.length || 0} availability slots
+                        </Badge>
+                      </div>
+                    )}
+
+                    {includeAvailability && session.hasStudentPreferences && (
+                      <div className="flex items-center gap-3 text-foreground">
+                        <Badge variant="outline" className="text-xs">
+                          {session.studentPreferencesCount || 0} student preferences
+                        </Badge>
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 p-4 bg-muted/50 rounded-xl border">

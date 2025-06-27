@@ -287,13 +287,6 @@ const Page = () => {
                                                                 <p className="text-sm mt-1">
                                                                     {session.schedule.day}, {session.schedule.date} • {session.schedule.startTime}-{session.schedule.endTime}
                                                                 </p>
-                                                                <Button 
-                                                                    size="sm" 
-                                                                    className="mt-2"
-                                                                    onClick={() => router.push(`/sessions/${session.id}`)}
-                                                                >
-                                                                    View Details
-                                                                </Button>
                                                             </div>
                                                         ))}
                                                     </div>
