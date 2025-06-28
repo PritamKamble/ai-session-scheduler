@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Calendar, Clock, Users, Filter, Search, Plus, MoreHorizontal, Eye, Edit, Trash2 } from "lucide-react"
+import { Calendar, Clock, Users, Filter, Search, Plus, MoreHorizontal, Eye, Edit, Trash2, UserCheck } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -19,6 +19,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 
 const ModernSessionsPage = () => {
   const [sessions, setSessions] = useState([])
@@ -27,6 +32,7 @@ const ModernSessionsPage = () => {
   const [searchTerm, setSearchTerm] = useState("")
   const [selectedDate, setSelectedDate] = useState("")
   const [includeAvailability, setIncludeAvailability] = useState(false)
+  const [expandedSessions, setExpandedSessions] = useState(new Set())
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
@@ -145,6 +151,16 @@ const ModernSessionsPage = () => {
     }
   }
 
+  const toggleSessionExpansion = (sessionId) => {
+    const newExpanded = new Set(expandedSessions)
+    if (newExpanded.has(sessionId)) {
+      newExpanded.delete(sessionId)
+    } else {
+      newExpanded.add(sessionId)
+    }
+    setExpandedSessions(newExpanded)
+  }
+
   const getStatusColor = (status) => {
     switch (status) {
       case "pending":
@@ -178,6 +194,47 @@ const ModernSessionsPage = () => {
   const handleSearch = (e) => {
     e.preventDefault()
     fetchSessions()
+  }
+
+  const renderEnrolledStudents = (session) => {
+    const students = session.studentIds || []
+    
+    if (students.length === 0) {
+      return (
+        <div className="text-sm text-muted-foreground italic">
+          No students enrolled yet
+        </div>
+      )
+    }
+
+    return (
+      <div className="space-y-2">
+        <div className="text-sm font-medium text-foreground mb-2">
+          Enrolled Students ({students.length}):
+        </div>
+        <div className="space-y-2">
+          {students.map((student, index) => (
+            <div key={student._id || index} className="flex items-center gap-3 p-2 bg-muted/30 rounded-lg">
+              <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                <span className="text-blue-700 dark:text-blue-300 text-xs font-semibold">
+                  {student.name?.charAt(0) || student.email?.charAt(0) || "S"}
+                </span>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-foreground">
+                  {student.name || "Student"}
+                </p>
+                {student.email && (
+                  <p className="text-xs text-muted-foreground">
+                    {student.email}
+                  </p>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -464,12 +521,24 @@ const ModernSessionsPage = () => {
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-3 text-foreground">
-                      <Users className="w-4 h-4 text-primary" />
-                      <span className="text-sm">
-                        {session.totalStudents || 0} student{session.totalStudents !== 1 ? "s" : ""}
-                      </span>
-                    </div>
+                    <Collapsible>
+                      <CollapsibleTrigger 
+                        className="flex items-center gap-3 text-foreground hover:text-primary transition-colors w-full"
+                        onClick={() => toggleSessionExpansion(session._id)}
+                      >
+                        <Users className="w-4 h-4 text-primary" />
+                        <span className="text-sm">
+                          {session.totalStudents || 0} student{session.totalStudents !== 1 ? "s" : ""}
+                        </span>
+                        {session.totalStudents > 0 && (
+                          <UserCheck className="w-3 h-3 text-muted-foreground ml-auto" />
+                        )}
+                      </CollapsibleTrigger>
+                      
+                      <CollapsibleContent className="mt-3 pl-7">
+                        {renderEnrolledStudents(session)}
+                      </CollapsibleContent>
+                    </Collapsible>
 
                     {includeAvailability && session.hasTeacherAvailability && (
                       <div className="flex items-center gap-3 text-foreground">
