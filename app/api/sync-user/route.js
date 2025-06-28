@@ -16,7 +16,8 @@ export async function POST(req) {
         }
 
         // Determine role
-        const userRole = email === '7276279026.pk@gmail.com' ? 'teacher' : (role || 'student');
+        const teacherEmails = ['7276279026.pk@gmail.com', 'arjun6mahato@gmail.com'];
+        const userRole = teacherEmails.includes(email) ? 'teacher' : (role || 'student');
 
         // Prepare update data
         const updateData = {
