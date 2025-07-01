@@ -105,7 +105,7 @@ const ModernSessionsPage = () => {
   }
 
   const handleViewDetails = (sessionId) => {
-    router.push(`/sessions/${sessionId}`)
+    router.push(`/session/${sessionId}`)
   }
 
   const handleEditSession = async (sessionId) => {
