@@ -21,7 +21,4 @@ const userSchema = new mongoose.Schema({
   }
 });
 
-// Add index for better query performance
-userSchema.index({ clerkId: 1 });
-
 export const User = mongoose.models.User || mongoose.model('User', userSchema);

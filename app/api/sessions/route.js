@@ -1,8 +1,10 @@
 // app/api/sessions/route.js
 import { NextResponse } from 'next/server';
+import connectDB from '@/config/db';
 import { Session } from '@/models/session';
 import { User } from '@/models/user';
-import connectDB from '@/config/db';
+import { Context } from '@/models/context';
+import { queryPineconeVectorStore } from '@/lib/pinecone';
 import mongoose from 'mongoose';
 
 export async function GET(request) {
@@ -18,203 +20,260 @@ export async function GET(request) {
     const userId = searchParams.get('userId');
     const userRole = searchParams.get('userRole');
     const includeAvailability = searchParams.get('includeAvailability') === 'true';
-    
-    console.log('=== SESSION FETCH DEBUG ===');
-    console.log('Query params:', { status, teacherId, studentId, date, topic, userId, userRole, includeAvailability });
+    const useVectorSearch = searchParams.get('useVectorSearch') === 'true';
+    const minScore = parseFloat(searchParams.get('minScore')) || 0.7;
+    const limit = parseInt(searchParams.get('limit')) || 50;
+    const page = parseInt(searchParams.get('page')) || 1;
+    const skip = (page - 1) * limit;
     
     // Build base query object
     let query = {};
+    let user = null;
+    let vectorResults = null;
     
-    // Helper function to check if a string is a valid ObjectId
-    const isValidObjectId = (id) => {
-      return mongoose.Types.ObjectId.isValid(id) && 
-             (String(new mongoose.Types.ObjectId(id)) === id);
+    // Helper function to find user's MongoDB _id from Clerk ID
+    const findUserByClerkId = async (clerkId) => {
+      if (!clerkId) return null;
+      try {
+        return await User.findOne({ clerkId }).select('_id role name email').lean();
+      } catch (error) {
+        console.error('Error finding user by Clerk ID:', error);
+        return null;
+      }
     };
     
-    // Helper function to find user's MongoDB _id from Clerk ID or ObjectId
-    const findUserMongoId = async (userIdentifier) => {
-      if (!userIdentifier) return null;
-      
-      console.log('Finding user for identifier:', userIdentifier);
-      
-      let searchQuery;
-      if (isValidObjectId(userIdentifier)) {
-        // If it's a valid ObjectId, search by both _id and clerkId
-        searchQuery = {
-          $or: [
-            { _id: userIdentifier },
-            { clerkId: userIdentifier }
-          ]
-        };
-      } else {
-        // If it's not a valid ObjectId, only search by clerkId
-        searchQuery = { clerkId: userIdentifier };
-      }
-      
-      console.log('User search query:', JSON.stringify(searchQuery, null, 2));
-      const user = await User.findOne(searchQuery).select('_id role clerkId name email');
-      console.log('User search result:', user);
-      return user;
-    };
-    
-    // Add access control based on user role
-    if (userRole === 'teacher' && userId) {
-      // Teachers can only see their own sessions
-      const teacherUser = await findUserMongoId(userId);
-      console.log('Teacher lookup - userId:', userId, 'found user:', teacherUser);
-      
-      if (teacherUser) {
-        // Verify the user is actually a teacher
-        if (teacherUser.role !== 'teacher') {
-          console.log('User is not a teacher, role:', teacherUser.role);
-          return NextResponse.json({
-            success: false,
-            error: 'Access denied - user is not a teacher',
-            data: []
-          }, { status: 403 });
-        }
-        
-        query.teacherId = teacherUser._id;
-        console.log('Teacher query set:', { teacherId: teacherUser._id });
-      } else {
-        console.log('Teacher not found, returning empty result');
+    // Find user if clerkId is provided
+    if (userId) {
+      user = await findUserByClerkId(userId);
+      if (!user) {
         return NextResponse.json({
-          success: true,
-          data: [],
-          aggregation: { total: 0, byStatus: {}, upcomingSessions: 0, todaySessions: 0 },
-          query: { filters: { status, teacherId, studentId, date, topic, userId, userRole }, includeAvailability }
-        });
-      }
-    } else if (userRole === 'student' && userId) {
-      // Students can only see sessions they've joined
-      const studentUser = await findUserMongoId(userId);
-      console.log('Student lookup - userId:', userId, 'found user:', studentUser);
-      
-      if (studentUser) {
-        // Verify the user is actually a student
-        if (studentUser.role !== 'student') {
-          console.log('User is not a student, role:', studentUser.role);
-          return NextResponse.json({
-            success: false,
-            error: 'Access denied - user is not a student',
-            data: []
-          }, { status: 403 });
-        }
-        
-        query.studentIds = { $in: [studentUser._id] };
-        console.log('Student query set:', { studentIds: { $in: [studentUser._id] } });
-      } else {
-        console.log('Student not found, returning empty result');
-        return NextResponse.json({
-          success: true,
-          data: [],
-          aggregation: { total: 0, byStatus: {}, upcomingSessions: 0, todaySessions: 0 },
-          query: { filters: { status, teacherId, studentId, date, topic, userId, userRole }, includeAvailability }
-        });
+          success: false,
+          error: 'User not found',
+          data: []
+        }, { status: 404 });
       }
     }
     
-    // Add additional filters only if no role-based restrictions or if admin
+    // Role-based access control with improved error handling
+    if (userRole === 'teacher' && user) {
+      if (user.role !== 'teacher') {
+        return NextResponse.json({
+          success: false,
+          error: 'Access denied - insufficient permissions',
+          data: []
+        }, { status: 403 });
+      }
+      query.teacherId = user._id;
+    } 
+    else if (userRole === 'student' && user) {
+      if (user.role !== 'student') {
+        return NextResponse.json({
+          success: false,
+          error: 'Access denied - insufficient permissions',
+          data: []
+        }, { status: 403 });
+      }
+      
+      // Base query for student's sessions
+      query.studentIds = { $in: [user._id] };
+      
+      // Enhanced vector search for students
+      if (useVectorSearch) {
+        try {
+          // Find the most recent context for this student user
+          const latestContext = await Context.findOne({ 
+            userId: user._id,
+            role: 'student' // Match the role field in your schema
+          })
+            .sort({ timestamp: -1 })
+            .limit(1)
+            .lean();
+          
+          if (latestContext?.embedding?.length > 0) {
+            console.log(`Using context embedding for user ${user._id}, message: "${latestContext.message.substring(0, 50)}..."`);
+            
+            // Build vector search filters - align with your session structure
+            const vectorFilters = {
+              studentIds: [user._id.toString()],
+              ...(status && { status }),
+              ...(date && { 
+                date: {
+                  $gte: new Date(date + 'T00:00:00.000Z').toISOString(),
+                  $lte: new Date(date + 'T23:59:59.999Z').toISOString()
+                }
+              }),
+              ...(topic && { topic })
+            };
+            
+            vectorResults = await queryPineconeVectorStore({
+              userId: user._id.toString(),
+              embedding: latestContext.embedding,
+              filter: vectorFilters,
+              topK: Math.min(limit * 2, 20), // Get more results for better filtering
+              minScore
+            });
+            
+            if (vectorResults?.length > 0) {
+              console.log(`Vector search found ${vectorResults.length} relevant sessions`);
+              // Combine vector results with regular query
+              const vectorSessionIds = vectorResults.map(r => {
+                try {
+                  return new mongoose.Types.ObjectId(r.id);
+                } catch (err) {
+                  console.warn(`Invalid ObjectId in vector results: ${r.id}`);
+                  return null;
+                }
+              }).filter(Boolean);
+              
+              if (vectorSessionIds.length > 0) {
+                query._id = { $in: vectorSessionIds };
+              }
+            } else {
+              // No vector results found, fall back to regular search
+              console.log('No vector results found with sufficient similarity, using regular search');
+            }
+          } else {
+            console.log('No valid embedding found in latest context, using regular search');
+          }
+        } catch (contextError) {
+          console.error('Vector search error:', contextError);
+          // Continue with regular query if vector search fails
+        }
+      }
+    }
+    
+    // Additional filters with validation
     if (status) {
-      const statuses = status.split(',');
-      query.status = statuses.length > 1 ? { $in: statuses } : status;
-      console.log('Status filter added:', query.status);
+      const validStatuses = ['pending', 'scheduled', 'completed', 'cancelled'];
+      const statuses = status.split(',').filter(s => validStatuses.includes(s));
+      
+      if (statuses.length === 0) {
+        return NextResponse.json({
+          success: false,
+          error: 'Invalid status values provided',
+          data: []
+        }, { status: 400 });
+      }
+      
+      query.status = statuses.length > 1 ? { $in: statuses } : statuses[0];
     }
     
     if (teacherId && (userRole === 'admin' || !userRole)) {
-      // Only allow teacherId filter for admins or when no role is specified
-      const teacherUser = await findUserMongoId(teacherId);
+      const teacherUser = await findUserByClerkId(teacherId);
       if (teacherUser) {
         query.teacherId = teacherUser._id;
-        console.log('Additional teacherId filter added:', teacherUser._id);
+      } else {
+        return NextResponse.json({
+          success: false,
+          error: 'Teacher not found',
+          data: []
+        }, { status: 404 });
       }
     }
     
     if (studentId && (userRole === 'admin' || !userRole)) {
-      // Only allow studentId filter for admins or when no role is specified
-      const studentUser = await findUserMongoId(studentId);
+      const studentUser = await findUserByClerkId(studentId);
       if (studentUser) {
         query.studentIds = { $in: [studentUser._id] };
-        console.log('Additional studentId filter added:', studentUser._id);
+      } else {
+        return NextResponse.json({
+          success: false,
+          error: 'Student not found',
+          data: []
+        }, { status: 404 });
       }
     }
     
     if (topic) {
       query.topic = { $regex: topic, $options: 'i' };
-      console.log('Topic filter added:', query.topic);
     }
     
     if (date) {
-      const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
-      
-      query['schedule.date'] = {
-        $gte: startOfDay,
-        $lte: endOfDay
-      };
-      console.log('Date filter added:', query['schedule.date']);
-    }
-    
-    // Special handling for debugging - if no role-based restrictions, show more info
-    if (!userRole && userId) {
-      console.log('No role specified, checking user:', userId);
-      const user = await findUserMongoId(userId);
-      console.log('Found user:', user);
-      
-      // Show all sessions for this user (both as teacher and student)
-      if (user) {
-        query = {
-          $or: [
-            { teacherId: user._id },
-            { studentIds: { $in: [user._id] } }
-          ]
-        };
-        console.log('User-based query (no role):', JSON.stringify(query, null, 2));
+      try {
+        const targetDate = new Date(date);
+        if (isNaN(targetDate.getTime())) {
+          throw new Error('Invalid date format');
+        }
+        
+        const startOfDay = new Date(targetDate);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(targetDate);
+        endOfDay.setHours(23, 59, 59, 999);
+        
+        query['schedule.date'] = { $gte: startOfDay, $lte: endOfDay };
+      } catch (dateError) {
+        return NextResponse.json({
+          success: false,
+          error: 'Invalid date format provided',
+          data: []
+        }, { status: 400 });
       }
     }
     
-    // Build the query with population
-    console.log('=== FINAL QUERY ===');
-    console.log('Final query before database:', JSON.stringify(query, null, 2));
+    // Special case: No role specified but user provided
+    if (!userRole && user) {
+      query = {
+        $or: [
+          { teacherId: user._id },
+          { studentIds: { $in: [user._id] } }
+        ]
+      };
+    }
     
+    // Get total count for pagination
+    const totalCount = await Session.countDocuments(query);
+    
+    // Build and execute query with pagination
     let sessionQuery = Session.find(query)
       .populate('teacherId', 'name email clerkId')
       .populate('studentIds', 'name email clerkId')
-      .sort({ 'schedule.date': 1, 'schedule.startTime': 1 });
+      .sort({ 'schedule.date': 1, 'schedule.startTime': 1 })
+      .skip(skip)
+      .limit(limit);
     
     if (includeAvailability) {
-      sessionQuery = sessionQuery.populate('studentTimingPreferences.studentId', 'name email');
+      sessionQuery = sessionQuery.populate({
+        path: 'studentTimingPreferences.studentId',
+        select: 'name email'
+      });
     }
     
     const sessions = await sessionQuery.lean();
-    console.log('=== QUERY RESULTS ===');
-    console.log('Sessions found:', sessions.length);
-    console.log('Sample session (first one):', sessions[0] ? {
-      _id: sessions[0]._id,
-      topic: sessions[0].topic,
-      teacherId: sessions[0].teacherId,
-      status: sessions[0].status,
-      schedule: sessions[0].schedule
-    } : 'No sessions found');
     
-    // Transform sessions to include computed fields
-    const transformedSessions = sessions.map(session => {
+    // If we used vector search, sort by similarity score
+    let sortedSessions = sessions;
+    if (vectorResults?.length > 0) {
+      const scoreMap = new Map(vectorResults.map(r => [r.id, r.score]));
+      
+      sortedSessions = sessions
+        .map(session => ({
+          ...session,
+          similarityScore: scoreMap.get(session._id.toString()) || 0
+        }))
+        .sort((a, b) => b.similarityScore - a.similarityScore);
+    }
+    
+    // Transform sessions with enhanced data
+    const transformedSessions = sortedSessions.map(session => {
       const transformed = {
         ...session,
         totalStudents: session.studentIds?.length || 0,
         hasTeacherAvailability: session.teacherAvailability?.length > 0,
         hasStudentPreferences: session.studentTimingPreferences?.length > 0,
         isCoordinated: session.status === 'scheduled',
-        
-        formattedSchedule: session.schedule ? {
+        ...(session.similarityScore !== undefined && { 
+          similarityScore: session.similarityScore 
+        })
+      };
+      
+      if (session.schedule) {
+        transformed.formattedSchedule = {
           ...session.schedule,
           dateString: session.schedule.date?.toISOString().split('T')[0],
           timeSlot: `${session.schedule.startTime} - ${session.schedule.endTime}`,
           timezone: session.schedule.timezone || 'UTC'
-        } : null
-      };
+        };
+      }
       
       if (includeAvailability && session.teacherAvailability) {
         transformed.availabilityOptions = session.teacherAvailability.map(slot => ({
@@ -225,50 +284,43 @@ export async function GET(request) {
       }
       
       if (includeAvailability && session.studentTimingPreferences) {
-        transformed.studentPreferencesCount = session.studentTimingPreferences.length;
-        transformed.studentsWithPreferences = session.studentTimingPreferences.map(pref => ({
+        transformed.studentPreferences = session.studentTimingPreferences.map(pref => ({
           studentId: pref.studentId,
-          preferenceCount: pref.preferences?.length || 0,
-          lastUpdated: pref.updatedAt
+          preferences: pref.preferences?.map(p => ({
+            ...p,
+            dateString: p.date?.toISOString().split('T')[0]
+          }))
         }));
       }
       
       return transformed;
     });
     
-    // Add aggregation data
-    const aggregation = {
-      total: transformedSessions.length,
-      byStatus: {},
-      upcomingSessions: 0,
-      todaySessions: 0
-    };
-    
+    // Calculate enhanced aggregations
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
     
-    transformedSessions.forEach(session => {
-      aggregation.byStatus[session.status] = (aggregation.byStatus[session.status] || 0) + 1;
-      
-      if (session.schedule?.date) {
-        const sessionDate = new Date(session.schedule.date);
-        sessionDate.setHours(0, 0, 0, 0);
-        
-        if (sessionDate >= today) {
-          aggregation.upcomingSessions++;
-        }
-        
-        if (sessionDate.getTime() === today.getTime()) {
-          aggregation.todaySessions++;
-        }
-      }
-    });
-    
-    console.log('=== RESPONSE SUMMARY ===');
-    console.log('Returning', transformedSessions.length, 'sessions');
-    console.log('Aggregation:', aggregation);
+    const aggregation = {
+      total: totalCount,
+      currentPage: page,
+      totalPages: Math.ceil(totalCount / limit),
+      hasNextPage: page < Math.ceil(totalCount / limit),
+      hasPrevPage: page > 1,
+      byStatus: transformedSessions.reduce((acc, session) => {
+        acc[session.status] = (acc[session.status] || 0) + 1;
+        return acc;
+      }, {}),
+      upcomingSessions: transformedSessions.filter(s => 
+        s.schedule?.date && new Date(s.schedule.date) >= today
+      ).length,
+      todaySessions: transformedSessions.filter(s => 
+        s.schedule?.date && 
+        new Date(s.schedule.date).toDateString() === today.toDateString()
+      ).length,
+      vectorSearchUsed: !!vectorResults?.length,
+      averageScore: vectorResults?.length > 0 ? 
+        vectorResults.reduce((sum, r) => sum + r.score, 0) / vectorResults.length : null
+    };
     
     return NextResponse.json({
       success: true,
@@ -282,7 +334,14 @@ export async function GET(request) {
           date,
           topic,
           userId,
-          userRole
+          userRole,
+          useVectorSearch,
+          minScore
+        },
+        pagination: {
+          page,
+          limit,
+          skip
         },
         includeAvailability
       }
@@ -291,15 +350,26 @@ export async function GET(request) {
   } catch (error) {
     console.error('Error fetching sessions:', error);
     
-    return NextResponse.json(
-      {
-        success: false,
-        error: 'Failed to fetch sessions',
-        message: error.message,
-        details: process.env.NODE_ENV === 'development' ? error.stack : undefined
-      },
-      { status: 500 }
-    );
+    // Enhanced error response
+    const errorResponse = {
+      success: false,
+      error: 'Failed to fetch sessions',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Include stack trace in development
+    if (process.env.NODE_ENV === 'development') {
+      errorResponse.details = error.stack;
+    }
+    
+    // Different status codes for different error types
+    let statusCode = 500;
+    if (error.message.includes('not found')) statusCode = 404;
+    if (error.message.includes('Access denied')) statusCode = 403;
+    if (error.message.includes('Invalid')) statusCode = 400;
+    
+    return NextResponse.json(errorResponse, { status: statusCode });
   }
 }
 

@@ -1,0 +1,652 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import {
+  Calendar,
+  Clock,
+  Users,
+  Filter,
+  Search,
+  Plus,
+  MoreHorizontal,
+  Eye,
+  Edit,
+  Trash2,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Card } from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { useRouter } from "next/navigation"
+import { toast } from "sonner"
+import { useUser } from "@clerk/nextjs"
+import { Skeleton } from "@/components/ui/skeleton"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarSeparator,
+} from "@/components/ui/sidebar"
+
+export function SchedulesSidebar() {
+  const [sessions, setSessions] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [filter, setFilter] = useState("all")
+  const [searchTerm, setSearchTerm] = useState("")
+  const [selectedDate, setSelectedDate] = useState("")
+  const [includeAvailability, setIncludeAvailability] = useState(false)
+  const [useVectorSearch, setUseVectorSearch] = useState(false)
+  const [expandedSessions, setExpandedSessions] = useState(new Set())
+  const [currentPage, setCurrentPage] = useState(1)
+  const [limit] = useState(10) // Sessions per page
+  const [stats, setStats] = useState({
+    total: 0,
+    pending: 0,
+    scheduled: 0,
+    completed: 0,
+    cancelled: 0,
+    upcoming: 0,
+    today: 0,
+    currentPage: 1,
+    totalPages: 1,
+    hasNextPage: false,
+    hasPrevPage: false,
+    vectorSearchUsed: false,
+    averageScore: null,
+  })
+
+  const router = useRouter()
+  const { isLoaded, user } = useUser()
+
+  useEffect(() => {
+    if (isLoaded && user) {
+      fetchSessions()
+    }
+  }, [filter, selectedDate, includeAvailability, useVectorSearch, currentPage, isLoaded, user])
+
+  const fetchSessions = async () => {
+    try {
+      setLoading(true)
+
+      if (!user) return
+
+      const params = new URLSearchParams()
+      
+      // Core parameters
+      params.append("userId", user.id) // Clerk ID
+      params.append("userRole", user.publicMetadata?.role || "student")
+      
+      // Pagination
+      params.append("page", currentPage.toString())
+      params.append("limit", limit.toString())
+      
+      // Filters
+      if (filter !== "all") params.append("status", filter)
+      if (selectedDate) {
+        // Validate date before sending
+        const date = new Date(selectedDate)
+        if (!isNaN(date.getTime())) {
+          const formattedDate = date.toISOString().split("T")[0]
+          params.append("date", formattedDate)
+        }
+      }
+      if (searchTerm.trim()) params.append("topic", searchTerm.trim())
+      
+      // Additional options
+      if (includeAvailability) params.append("includeAvailability", "true")
+      
+      // Vector search for students
+      if (user.publicMetadata?.role === "student" && useVectorSearch) {
+        params.append("useVectorSearch", "true")
+        params.append("minScore", "0.7")
+      }
+
+      const response = await fetch(`/api/sessions?${params.toString()}`)
+      
+      if (!response.ok) {
+        const errorData = await response.json()
+        
+        // Handle specific error types
+        switch (response.status) {
+          case 403:
+            toast.error("Access denied - insufficient permissions")
+            break
+          case 404:
+            toast.error("User or resource not found")
+            break
+          case 400:
+            toast.error("Invalid request parameters")
+            break
+          default:
+            toast.error(errorData.error || "Failed to fetch sessions")
+        }
+        
+        throw new Error(errorData.error || "Failed to fetch sessions")
+      }
+
+      const data = await response.json()
+      
+      if (!data.success) {
+        throw new Error(data.error || "Failed to fetch sessions")
+      }
+
+      setSessions(data.data || [])
+
+      // Enhanced stats with pagination info
+      setStats({
+        total: data.aggregation?.total || 0,
+        pending: data.aggregation?.byStatus?.pending || 0,
+        scheduled: data.aggregation?.byStatus?.scheduled || 0,
+        completed: data.aggregation?.byStatus?.completed || 0,
+        cancelled: data.aggregation?.byStatus?.cancelled || 0,
+        upcoming: data.aggregation?.upcomingSessions || 0,
+        today: data.aggregation?.todaySessions || 0,
+        currentPage: data.aggregation?.currentPage || 1,
+        totalPages: data.aggregation?.totalPages || 1,
+        hasNextPage: data.aggregation?.hasNextPage || false,
+        hasPrevPage: data.aggregation?.hasPrevPage || false,
+        vectorSearchUsed: data.aggregation?.vectorSearchUsed || false,
+        averageScore: data.aggregation?.averageScore || null,
+      })
+      
+      // Show vector search feedback
+      if (data.aggregation?.vectorSearchUsed) {
+        toast.success(`Found ${data.data.length} sessions using AI recommendations`)
+      }
+      
+    } catch (error) {
+      console.error("Error fetching sessions:", error)
+      // Don't show toast here since we already handle it above
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleCreateSession = () => {
+    router.push("/sessions/create")
+  }
+
+  const handleViewDetails = (sessionId) => {
+    router.push(`/session/${sessionId}`)
+  }
+
+  const handleEditSession = async (sessionId) => {
+    const session = sessions.find((s) => s._id === sessionId)
+    if (!session) return
+
+    // Improved permission check
+    const isOwner = (
+      (session.teacherId._id && session.teacherId._id.toString() === user.id) ||
+      (session.teacherId.clerkId && session.teacherId.clerkId === user.id)
+    )
+
+    if (!isOwner) {
+      toast.error("You can only edit your own sessions")
+      return
+    }
+
+    router.push(`/sessions/${sessionId}/edit`)
+  }
+
+  const handleDeleteSession = async (sessionId) => {
+    try {
+      const session = sessions.find((s) => s._id === sessionId)
+      if (!session) return
+
+      // Improved permission check
+      const isOwner = (
+        (session.teacherId._id && session.teacherId._id.toString() === user.id) ||
+        (session.teacherId.clerkId && session.teacherId.clerkId === user.id)
+      )
+
+      if (!isOwner) {
+        toast.error("You can only delete your own sessions")
+        return
+      }
+
+      const response = await fetch(`/api/sessions?sessionId=${sessionId}`, {
+        method: "DELETE",
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || "Failed to delete session")
+      }
+
+      toast.success("Session deleted successfully")
+      fetchSessions()
+    } catch (error) {
+      console.error("Error deleting session:", error)
+      toast.error(error.message || "Failed to delete session")
+    }
+  }
+
+  const toggleSessionExpansion = (sessionId) => {
+    const newExpanded = new Set(expandedSessions)
+    if (newExpanded.has(sessionId)) {
+      newExpanded.delete(sessionId)
+    } else {
+      newExpanded.add(sessionId)
+    }
+    setExpandedSessions(newExpanded)
+  }
+
+  const getStatusColor = (status) => {
+    switch (status) {
+      case "pending":
+        return "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800"
+      case "scheduled":
+        return "bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950 dark:text-blue-300 dark:border-blue-800"
+      case "completed":
+        return "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300 dark:border-emerald-800"
+      case "cancelled":
+        return "bg-red-50 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800"
+      default:
+        return "bg-gray-50 text-gray-700 border-gray-200 dark:bg-gray-950 dark:text-gray-300 dark:border-gray-800"
+    }
+  }
+
+  const formatDate = (dateString) => {
+    if (!dateString) return "No date set"
+    return new Date(dateString).toLocaleDateString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    })
+  }
+
+  const formatTimeSlot = (session) => {
+    if (!session.schedule) return "No time set"
+    return `${session.schedule.startTime || ""} - ${session.schedule.endTime || ""}`
+  }
+
+  const handleSearch = (e) => {
+    e.preventDefault()
+    setCurrentPage(1) // Reset to first page when searching
+    fetchSessions()
+  }
+
+  const handlePageChange = (newPage) => {
+    if (newPage >= 1 && newPage <= stats.totalPages) {
+      setCurrentPage(newPage)
+    }
+  }
+
+  const handleFilterChange = (newFilter) => {
+    setFilter(newFilter)
+    setCurrentPage(1) // Reset to first page when filtering
+  }
+
+  const handleDateChange = (newDate) => {
+    setSelectedDate(newDate)
+    setCurrentPage(1) // Reset to first page when filtering
+  }
+
+  const renderEnrolledStudents = (session) => {
+    const students = session.studentIds || []
+
+    if (students.length === 0) {
+      return <div className="text-xs text-muted-foreground italic">No students enrolled yet</div>
+    }
+
+    return (
+      <div className="space-y-1">
+        <div className="text-xs font-medium text-foreground mb-1">Enrolled ({students.length}):</div>
+        <div className="space-y-1">
+          {students.slice(0, 2).map((student, index) => (
+            <div key={student._id || index} className="flex items-center gap-2 p-1 bg-muted/30 rounded text-xs">
+              <div className="w-4 h-4 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                <span className="text-blue-700 dark:text-blue-300 text-[10px] font-semibold">
+                  {student.name?.charAt(0) || student.email?.charAt(0) || "S"}
+                </span>
+              </div>
+              <span className="text-foreground truncate">{student.name || "Student"}</span>
+            </div>
+          ))}
+          {students.length > 2 && <div className="text-xs text-muted-foreground">+{students.length - 2} more</div>}
+        </div>
+      </div>
+    )
+  }
+
+  const renderPagination = () => {
+    if (stats.totalPages <= 1) return null
+
+    return (
+      <div className="flex items-center justify-between mt-4 pt-2 border-t">
+        <div className="text-xs text-muted-foreground">
+          Page {stats.currentPage} of {stats.totalPages}
+        </div>
+        <div className="flex gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handlePageChange(currentPage - 1)}
+            disabled={!stats.hasPrevPage}
+            className="h-6 w-6 p-0"
+          >
+            <ChevronLeft className="w-3 h-3" />
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => handlePageChange(currentPage + 1)}
+            disabled={!stats.hasNextPage}
+            className="h-6 w-6 p-0"
+          >
+            <ChevronRight className="w-3 h-3" />
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <Sidebar className="border-r">
+      <SidebarHeader className="p-4">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="p-2 bg-primary rounded-lg">
+            <Calendar className="w-4 h-4 text-primary-foreground" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">
+              {user?.publicMetadata?.role === "teacher" ? "My Sessions" : "My Learning"}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              {user?.publicMetadata?.role === "teacher" ? "Teaching schedule" : "Enrolled sessions"}
+              {stats.vectorSearchUsed && (
+                <span className="ml-1 text-blue-600 dark:text-blue-400">• AI Enhanced</span>
+              )}
+            </p>
+          </div>
+        </div>
+
+        {user?.publicMetadata?.role === "teacher" && (
+          <Button size="sm" className="w-full" onClick={handleCreateSession}>
+            <Plus className="w-4 h-4 mr-2" />
+            Create Session
+          </Button>
+        )}
+      </SidebarHeader>
+
+      <SidebarContent className="px-4">
+        {/* Quick Stats */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Quick Stats</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              <Card className="p-2">
+                <div className="text-center">
+                  <div className="text-lg font-bold text-foreground">{stats.total}</div>
+                  <div className="text-xs text-muted-foreground">Total</div>
+                </div>
+              </Card>
+              <Card className="p-2">
+                <div className="text-center">
+                  <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{stats.upcoming}</div>
+                  <div className="text-xs text-muted-foreground">Upcoming</div>
+                </div>
+              </Card>
+            </div>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarSeparator />
+
+        {/* Filters */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Filters</SidebarGroupLabel>
+          <SidebarGroupContent className="space-y-3">
+            <form onSubmit={handleSearch} className="space-y-2">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-3 h-3" />
+                <Input
+                  type="text"
+                  placeholder="Search sessions..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-7 h-8 text-xs"
+                />
+              </div>
+
+              <Select value={filter} onValueChange={handleFilterChange}>
+                <SelectTrigger className="h-8 text-xs">
+                  <Filter className="w-3 h-3 mr-1" />
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="scheduled">Scheduled</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => handleDateChange(e.target.value)}
+                className="h-8 text-xs"
+              />
+
+              <Button type="submit" variant="outline" size="sm" className="w-full h-8 text-xs bg-transparent">
+                Apply Filters
+              </Button>
+            </form>
+
+            {/* Advanced Options */}
+            <div className="space-y-2">
+              {user?.publicMetadata?.role === "teacher" && (
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="includeAvailability"
+                    checked={includeAvailability}
+                    onChange={(e) => setIncludeAvailability(e.target.checked)}
+                    className="w-3 h-3"
+                  />
+                  <label htmlFor="includeAvailability" className="text-xs text-muted-foreground">
+                    Include availability
+                  </label>
+                </div>
+              )}
+
+              {user?.publicMetadata?.role === "student" && (
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="checkbox"
+                    id="useVectorSearch"
+                    checked={useVectorSearch}
+                    onChange={(e) => setUseVectorSearch(e.target.checked)}
+                    className="w-3 h-3"
+                  />
+                  <label htmlFor="useVectorSearch" className="text-xs text-muted-foreground">
+                    AI recommendations
+                  </label>
+                </div>
+              )}
+            </div>
+          </SidebarGroupContent>
+        </SidebarGroup>
+
+        <SidebarSeparator />
+
+        {/* Sessions List */}
+        <SidebarGroup>
+          <SidebarGroupLabel>Sessions</SidebarGroupLabel>
+          <SidebarGroupContent>
+            {loading ? (
+              <div className="space-y-3">
+                {[...Array(3)].map((_, i) => (
+                  <Card key={i} className="p-3">
+                    <Skeleton className="h-4 w-3/4 mb-2" />
+                    <Skeleton className="h-3 w-full mb-1" />
+                    <Skeleton className="h-3 w-1/2" />
+                  </Card>
+                ))}
+              </div>
+            ) : sessions.length === 0 ? (
+              <Card className="p-4 text-center">
+                <Calendar className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                <p className="text-xs text-muted-foreground">
+                  {searchTerm || filter !== "all" || selectedDate 
+                    ? "No sessions match your filters" 
+                    : "No sessions found"
+                  }
+                </p>
+                {user?.publicMetadata?.role === "teacher" && !searchTerm && filter === "all" && !selectedDate && (
+                  <Button size="sm" className="mt-2" onClick={handleCreateSession}>
+                    <Plus className="w-3 h-3 mr-1" />
+                    Create First Session
+                  </Button>
+                )}
+              </Card>
+            ) : (
+              <div className="space-y-3">
+                {sessions.map((session) => (
+                  <Card
+                    key={session._id}
+                    className="p-3 hover:shadow-md transition-shadow cursor-pointer"
+                    onClick={() => handleViewDetails(session._id)}
+                  >
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 pr-2">
+                          <h4 className="text-sm font-medium text-foreground truncate">
+                            {session.topic}
+                          </h4>
+                          {session.similarityScore !== undefined && (
+                            <div className="text-xs text-blue-600 dark:text-blue-400 mt-1">
+                              Match: {Math.round(session.similarityScore * 100)}%
+                            </div>
+                          )}
+                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                              <MoreHorizontal className="w-3 h-3" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent>
+                            <DropdownMenuItem
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleViewDetails(session._id)
+                              }}
+                            >
+                              <Eye className="w-3 h-3 mr-2" />
+                              View Details
+                            </DropdownMenuItem>
+                            {user?.publicMetadata?.role === "teacher" && (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleEditSession(session._id)
+                                  }}
+                                >
+                                  <Edit className="w-3 h-3 mr-2" />
+                                  Edit
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  className="text-destructive focus:text-destructive"
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    handleDeleteSession(session._id)
+                                  }}
+                                >
+                                  <Trash2 className="w-3 h-3 mr-2" />
+                                  Delete
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+
+                      <Badge className={`${getStatusColor(session.status)} text-xs`}>
+                        {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
+                      </Badge>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-xs text-foreground">
+                          <Calendar className="w-3 h-3 text-primary" />
+                          <span>{formatDate(session.schedule?.date)}</span>
+                        </div>
+
+                        <div className="flex items-center gap-2 text-xs text-foreground">
+                          <Clock className="w-3 h-3 text-primary" />
+                          <span>{formatTimeSlot(session)}</span>
+                        </div>
+
+                        <Collapsible>
+                          <CollapsibleTrigger
+                            className="flex items-center gap-2 text-xs text-foreground hover:text-primary transition-colors w-full"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleSessionExpansion(session._id)
+                            }}
+                          >
+                            <Users className="w-3 h-3 text-primary" />
+                            <span>
+                              {session.totalStudents || 0} student{session.totalStudents !== 1 ? "s" : ""}
+                            </span>
+                            {session.totalStudents > 0 && (
+                              <ChevronDown className="w-3 h-3 text-muted-foreground ml-auto" />
+                            )}
+                          </CollapsibleTrigger>
+
+                          <CollapsibleContent className="mt-2">{renderEnrolledStudents(session)}</CollapsibleContent>
+                        </Collapsible>
+                      </div>
+
+                      <div className="flex items-center gap-2 p-2 bg-muted/30 rounded text-xs">
+                        <div className="w-5 h-5 bg-primary rounded-full flex items-center justify-center">
+                          <span className="text-primary-foreground text-[10px] font-semibold">
+                            {session.teacherId?.name?.charAt(0) || "T"}
+                          </span>
+                        </div>
+                        <span className="text-foreground font-medium truncate">
+                          {session.teacherId?.name || "Unknown Instructor"}
+                        </span>
+                      </div>
+                    </div>
+                  </Card>
+                ))}
+
+                {renderPagination()}
+              </div>
+            )}
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+
+      <SidebarFooter className="p-4">
+        <Button
+          variant="outline"
+          size="sm"
+          className="w-full text-xs bg-transparent"
+          onClick={() => router.push("/sessions")}
+        >
+          View Full Schedule
+        </Button>
+        {stats.total > 0 && (
+          <div className="text-xs text-muted-foreground text-center mt-2">
+            Showing {sessions.length} of {stats.total} sessions
+          </div>
+        )}
+      </SidebarFooter>
+    </Sidebar>
+  )
+}
