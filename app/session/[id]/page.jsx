@@ -122,7 +122,7 @@ export default function SessionDetails({ params }) {
           throw new Error(errorData.error || 'Failed to delete session');
         }
 
-        router.push('/schedules');
+        router.push('/dashboard');
       } catch (err) {
         setError(err.message);
       }
@@ -147,7 +147,7 @@ export default function SessionDetails({ params }) {
           <h3 className="font-medium">Error</h3>
           <p className="mt-1">{error}</p>
           <button 
-            onClick={() => router.push('/schedules')}
+            onClick={() => router.push('/dashboard')}
             className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
           >
             Back to Sessions
@@ -164,7 +164,7 @@ export default function SessionDetails({ params }) {
           <h3 className="font-medium">Session Not Found</h3>
           <p className="mt-1">The session you're looking for doesn't exist.</p>
           <button 
-            onClick={() => router.push('/schedules')}
+            onClick={() => router.push('/dashboard')}
             className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
           >
             Back to Sessions
@@ -203,7 +203,7 @@ export default function SessionDetails({ params }) {
       <div className="max-w-4xl mx-auto">
         <div className="mb-8">
           <nav className="flex items-center space-x-2 text-sm text-gray-500 mb-4">
-            <Link href="/schedules" className="hover:text-gray-700">Sessions</Link>
+            <Link href="/dashboard" className="hover:text-gray-700">Sessions</Link>
             <span>/</span>
             <span className="text-gray-900">{session.topic}</span>
           </nav>

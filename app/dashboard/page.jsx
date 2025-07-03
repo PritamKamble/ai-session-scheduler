@@ -223,7 +223,9 @@ const DashboardPage = () => {
             <Breadcrumb>
               <BreadcrumbList>
                 <BreadcrumbItem>
-                  <BreadcrumbPage>{role === "teacher" ? "Teacher Dashboard" : "Student Dashboard"}</BreadcrumbPage>
+                  <BreadcrumbPage className="mx-20">
+                    {role === "teacher" ? "Teacher Dashboard" : "Student Dashboard"}
+                  </BreadcrumbPage>
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>
@@ -231,7 +233,7 @@ const DashboardPage = () => {
 
           {/* Main content */}
           <div className="flex-1 flex flex-col p-4 sm:p-6 lg:p-8">
-            <div className="max-w-4xl mx-auto h-full flex flex-col">
+            <div className="w-full max-w-4xl mx-auto h-full flex flex-col">
               {/* Welcome section */}
               <div className="mb-6 sm:mb-8">
                 {isSignedIn ? (
@@ -251,12 +253,14 @@ const DashboardPage = () => {
               </div>
 
               {/* Conversation area */}
-              <div className="conversation-container flex-1 mb-6 space-y-4 overflow-y-auto">
+              <div className="conversation-container flex-1 mb-6 space-y-4 overflow-y-auto min-h-[400px] max-h-[60vh]">
                 {conversation.map((msg, index) => (
                   <div
                     key={index}
                     className={`p-4 rounded-lg ${
-                      msg.role === "user" ? "bg-primary/10 ml-auto max-w-[80%]" : "bg-muted/50 mr-auto max-w-[80%]"
+                      msg.role === "user"
+                        ? "bg-primary/10 ml-auto max-w-[80%] sm:max-w-[70%] lg:max-w-[60%]"
+                        : "bg-muted/50 mr-auto max-w-[80%] sm:max-w-[70%] lg:max-w-[60%]"
                     }`}
                   >
                     <p>{msg.content}</p>
@@ -291,7 +295,7 @@ const DashboardPage = () => {
                     </Button>
                   </div>
                 )}
-                <div className="relative w-full max-w-2xl mx-auto">
+                <div className="relative w-full max-w-3xl mx-auto">
                   <div className="relative group">
                     <div className="absolute -inset-0.5 bg-gradient-to-r from-primary/30 to-primary/30 rounded-xl blur opacity-75 group-hover:opacity-100 transition duration-1000"></div>
                     <form onSubmit={handleSubmit} className="relative">

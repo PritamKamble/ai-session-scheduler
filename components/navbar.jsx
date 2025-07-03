@@ -48,18 +48,7 @@ export default function Navbar() {
               <UserButton afterSignOutUrl="/" />
             </SignedIn>
 
-            <Button
-              asChild
-              className="flex items-center gap-3 px-4 py-2 bg-[#1a1d21] hover:bg-[#2a2d31] text-white rounded-xl border-0 h-auto dark:bg-primary dark:hover:bg-primary/90 dark:shadow-[0_0_10px_rgba(36,101,237,0.4)]"
-            >
-              <Link href="#contact">
-                <Zap className="h-4 w-4 text-white" />
-                <div className="flex flex-col items-start">
-                  <span className="text-sm font-medium">Request Demo</span>
-                  <span className="text-xs text-gray-400 dark:text-gray-300 -mt-0.5">v1.0.0</span>
-                </div>
-              </Link>
-            </Button>
+            
           </div>
 
           <Sheet open={isOpen} onOpenChange={setIsOpen}>
@@ -95,18 +84,7 @@ export default function Navbar() {
                     </div>
                   </SignedIn>
                   <ThemeToggle />
-                  <Button
-                    asChild
-                    className="w-full flex items-center gap-3 px-4 py-2 bg-[#1a1d21] hover:bg-[#2a2d31] text-white rounded-xl border-0 h-auto dark:bg-primary dark:hover:bg-primary/90 dark:shadow-[0_0_10px_rgba(36,101,237,0.4)]"
-                  >
-                    <Link href="#contact" onClick={() => setIsOpen(false)}>
-                      <Zap className="h-4 w-4 text-white" />
-                      <div className="flex flex-col items-start">
-                        <span className="text-sm font-medium">Request Demo</span>
-                        <span className="text-xs text-gray-400 dark:text-gray-300 -mt-0.5">v1.0.0</span>
-                      </div>
-                    </Link>
-                  </Button>
+                 
                 </div>
               </nav>
             </SheetContent>

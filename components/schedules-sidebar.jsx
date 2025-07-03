@@ -37,6 +37,7 @@ import {
   SidebarHeader,
   SidebarSeparator,
 } from "@/components/ui/sidebar"
+import Link from "next/link"
 
 export function SchedulesSidebar() {
   const [sessions, setSessions] = useState([])
@@ -48,7 +49,7 @@ export function SchedulesSidebar() {
   const [useVectorSearch, setUseVectorSearch] = useState(false)
   const [expandedSessions, setExpandedSessions] = useState(new Set())
   const [currentPage, setCurrentPage] = useState(1)
-  const [limit] = useState(10) // Sessions per page
+  const [limit] = useState(10)
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
@@ -81,19 +82,14 @@ export function SchedulesSidebar() {
       if (!user) return
 
       const params = new URLSearchParams()
-      
-      // Core parameters
-      params.append("userId", user.id) // Clerk ID
+
+      params.append("userId", user.id)
       params.append("userRole", user.publicMetadata?.role || "student")
-      
-      // Pagination
       params.append("page", currentPage.toString())
       params.append("limit", limit.toString())
-      
-      // Filters
+
       if (filter !== "all") params.append("status", filter)
       if (selectedDate) {
-        // Validate date before sending
         const date = new Date(selectedDate)
         if (!isNaN(date.getTime())) {
           const formattedDate = date.toISOString().split("T")[0]
@@ -101,22 +97,18 @@ export function SchedulesSidebar() {
         }
       }
       if (searchTerm.trim()) params.append("topic", searchTerm.trim())
-      
-      // Additional options
       if (includeAvailability) params.append("includeAvailability", "true")
-      
-      // Vector search for students
+
       if (user.publicMetadata?.role === "student" && useVectorSearch) {
         params.append("useVectorSearch", "true")
         params.append("minScore", "0.7")
       }
 
       const response = await fetch(`/api/sessions?${params.toString()}`)
-      
+
       if (!response.ok) {
         const errorData = await response.json()
-        
-        // Handle specific error types
+
         switch (response.status) {
           case 403:
             toast.error("Access denied - insufficient permissions")
@@ -130,19 +122,18 @@ export function SchedulesSidebar() {
           default:
             toast.error(errorData.error || "Failed to fetch sessions")
         }
-        
+
         throw new Error(errorData.error || "Failed to fetch sessions")
       }
 
       const data = await response.json()
-      
+
       if (!data.success) {
         throw new Error(data.error || "Failed to fetch sessions")
       }
 
       setSessions(data.data || [])
 
-      // Enhanced stats with pagination info
       setStats({
         total: data.aggregation?.total || 0,
         pending: data.aggregation?.byStatus?.pending || 0,
@@ -158,15 +149,12 @@ export function SchedulesSidebar() {
         vectorSearchUsed: data.aggregation?.vectorSearchUsed || false,
         averageScore: data.aggregation?.averageScore || null,
       })
-      
-      // Show vector search feedback
+
       if (data.aggregation?.vectorSearchUsed) {
         toast.success(`Found ${data.data.length} sessions using AI recommendations`)
       }
-      
     } catch (error) {
       console.error("Error fetching sessions:", error)
-      // Don't show toast here since we already handle it above
     } finally {
       setLoading(false)
     }
@@ -184,11 +172,9 @@ export function SchedulesSidebar() {
     const session = sessions.find((s) => s._id === sessionId)
     if (!session) return
 
-    // Improved permission check
-    const isOwner = (
+    const isOwner =
       (session.teacherId._id && session.teacherId._id.toString() === user.id) ||
       (session.teacherId.clerkId && session.teacherId.clerkId === user.id)
-    )
 
     if (!isOwner) {
       toast.error("You can only edit your own sessions")
@@ -203,11 +189,9 @@ export function SchedulesSidebar() {
       const session = sessions.find((s) => s._id === sessionId)
       if (!session) return
 
-      // Improved permission check
-      const isOwner = (
+      const isOwner =
         (session.teacherId._id && session.teacherId._id.toString() === user.id) ||
         (session.teacherId.clerkId && session.teacherId.clerkId === user.id)
-      )
 
       if (!isOwner) {
         toast.error("You can only delete your own sessions")
@@ -272,7 +256,7 @@ export function SchedulesSidebar() {
 
   const handleSearch = (e) => {
     e.preventDefault()
-    setCurrentPage(1) // Reset to first page when searching
+    setCurrentPage(1)
     fetchSessions()
   }
 
@@ -284,36 +268,38 @@ export function SchedulesSidebar() {
 
   const handleFilterChange = (newFilter) => {
     setFilter(newFilter)
-    setCurrentPage(1) // Reset to first page when filtering
+    setCurrentPage(1)
   }
 
   const handleDateChange = (newDate) => {
     setSelectedDate(newDate)
-    setCurrentPage(1) // Reset to first page when filtering
+    setCurrentPage(1)
   }
 
   const renderEnrolledStudents = (session) => {
     const students = session.studentIds || []
 
     if (students.length === 0) {
-      return <div className="text-xs text-muted-foreground italic">No students enrolled yet</div>
+      return <div className="text-sm text-muted-foreground italic">No students enrolled yet</div>
     }
 
     return (
-      <div className="space-y-1">
-        <div className="text-xs font-medium text-foreground mb-1">Enrolled ({students.length}):</div>
-        <div className="space-y-1">
-          {students.slice(0, 2).map((student, index) => (
-            <div key={student._id || index} className="flex items-center gap-2 p-1 bg-muted/30 rounded text-xs">
-              <div className="w-4 h-4 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
-                <span className="text-blue-700 dark:text-blue-300 text-[10px] font-semibold">
+      <div className="space-y-2">
+        <div className="text-sm font-medium text-foreground mb-2">Enrolled ({students.length}):</div>
+        <div className="space-y-2">
+          {students.slice(0, 3).map((student, index) => (
+            <div key={student._id || index} className="flex items-center gap-3 p-2 bg-muted/30 rounded-lg">
+              <div className="w-6 h-6 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                <span className="text-blue-700 dark:text-blue-300 text-xs font-semibold">
                   {student.name?.charAt(0) || student.email?.charAt(0) || "S"}
                 </span>
               </div>
-              <span className="text-foreground truncate">{student.name || "Student"}</span>
+              <span className="text-sm text-foreground truncate">{student.name || "Student"}</span>
             </div>
           ))}
-          {students.length > 2 && <div className="text-xs text-muted-foreground">+{students.length - 2} more</div>}
+          {students.length > 3 && (
+            <div className="text-sm text-muted-foreground">+{students.length - 3} more students</div>
+          )}
         </div>
       </div>
     )
@@ -323,28 +309,28 @@ export function SchedulesSidebar() {
     if (stats.totalPages <= 1) return null
 
     return (
-      <div className="flex items-center justify-between mt-4 pt-2 border-t">
-        <div className="text-xs text-muted-foreground">
+      <div className="flex items-center justify-between mt-6 pt-4 border-t">
+        <div className="text-sm text-muted-foreground">
           Page {stats.currentPage} of {stats.totalPages}
         </div>
-        <div className="flex gap-1">
+        <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(currentPage - 1)}
             disabled={!stats.hasPrevPage}
-            className="h-6 w-6 p-0"
           >
-            <ChevronLeft className="w-3 h-3" />
+            <ChevronLeft className="w-4 h-4 mr-1" />
+            Previous
           </Button>
           <Button
             variant="outline"
             size="sm"
             onClick={() => handlePageChange(currentPage + 1)}
             disabled={!stats.hasNextPage}
-            className="h-6 w-6 p-0"
           >
-            <ChevronRight className="w-3 h-3" />
+            Next
+            <ChevronRight className="w-4 h-4 ml-1" />
           </Button>
         </div>
       </div>
@@ -352,51 +338,71 @@ export function SchedulesSidebar() {
   }
 
   return (
-    <Sidebar className="border-r">
-      <SidebarHeader className="p-4">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="p-2 bg-primary rounded-lg">
-            <Calendar className="w-4 h-4 text-primary-foreground" />
+    <Sidebar className="border-r w-80 lg:w-96">
+      <SidebarHeader className="p-6">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="p-3 bg-primary rounded-xl">
+            <Calendar className="w-5 h-5 text-primary-foreground" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-foreground">
+            <h2 className="text-xl font-semibold text-foreground">
               {user?.publicMetadata?.role === "teacher" ? "My Sessions" : "My Learning"}
             </h2>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-sm text-muted-foreground ">
               {user?.publicMetadata?.role === "teacher" ? "Teaching schedule" : "Enrolled sessions"}
-              {stats.vectorSearchUsed && (
-                <span className="ml-1 text-blue-600 dark:text-blue-400">• AI Enhanced</span>
-              )}
             </p>
+            <Link href="/">
+            <h1 className="text-zinc-600 hover:text-green-800 tracking-tighter">Back to home</h1>
+            </Link>
           </div>
         </div>
 
         {user?.publicMetadata?.role === "teacher" && (
-          <Button size="sm" className="w-full" onClick={handleCreateSession}>
+          <Button className="w-full" onClick={handleCreateSession}>
             <Plus className="w-4 h-4 mr-2" />
-            Create Session
+            Create New Session
           </Button>
         )}
       </SidebarHeader>
 
-      <SidebarContent className="px-4">
+      <SidebarContent className="px-6">
         {/* Quick Stats */}
         <SidebarGroup>
-          <SidebarGroupLabel>Quick Stats</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-base font-medium">Quick Stats</SidebarGroupLabel>
           <SidebarGroupContent>
-            <div className="grid grid-cols-2 gap-2 mb-4">
-              <Card className="p-2">
+            <div className="grid grid-cols-2 gap-4 mb-6">
+              <Card className="p-4">
                 <div className="text-center">
-                  <div className="text-lg font-bold text-foreground">{stats.total}</div>
-                  <div className="text-xs text-muted-foreground">Total</div>
+                  <div className="text-2xl font-bold text-foreground">{stats.total}</div>
+                  <div className="text-sm text-muted-foreground">Total Sessions</div>
                 </div>
               </Card>
-              <Card className="p-2">
+              <Card className="p-4">
                 <div className="text-center">
-                  <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{stats.upcoming}</div>
-                  <div className="text-xs text-muted-foreground">Upcoming</div>
+                  <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{stats.upcoming}</div>
+                  <div className="text-sm text-muted-foreground">Upcoming</div>
                 </div>
               </Card>
+            </div>
+
+            {/* Additional stats for desktop */}
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              <div className="text-center p-2 bg-muted/30 rounded-lg">
+                <div className="text-lg font-semibold text-amber-600">{stats.pending}</div>
+                <div className="text-xs text-muted-foreground">Pending</div>
+              </div>
+              <div className="text-center p-2 bg-muted/30 rounded-lg">
+                <div className="text-lg font-semibold text-blue-600">{stats.scheduled}</div>
+                <div className="text-xs text-muted-foreground">Scheduled</div>
+              </div>
+              <div className="text-center p-2 bg-muted/30 rounded-lg">
+                <div className="text-lg font-semibold text-green-600">{stats.completed}</div>
+                <div className="text-xs text-muted-foreground">Completed</div>
+              </div>
+              <div className="text-center p-2 bg-muted/30 rounded-lg">
+                <div className="text-lg font-semibold text-red-600">{stats.cancelled}</div>
+                <div className="text-xs text-muted-foreground">Cancelled</div>
+              </div>
             </div>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -405,74 +411,77 @@ export function SchedulesSidebar() {
 
         {/* Filters */}
         <SidebarGroup>
-          <SidebarGroupLabel>Filters</SidebarGroupLabel>
-          <SidebarGroupContent className="space-y-3">
-            <form onSubmit={handleSearch} className="space-y-2">
+          <SidebarGroupLabel className="text-base font-medium">Filters & Search</SidebarGroupLabel>
+          <SidebarGroupContent className="space-y-4">
+            <form onSubmit={handleSearch} className="space-y-3">
               <div className="relative">
-                <Search className="absolute left-2 top-1/2 transform -translate-y-1/2 text-muted-foreground w-3 h-3" />
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
                 <Input
                   type="text"
-                  placeholder="Search sessions..."
+                  placeholder="Search sessions by topic..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-7 h-8 text-xs"
+                  className="pl-10 h-10"
                 />
               </div>
 
-              <Select value={filter} onValueChange={handleFilterChange}>
-                <SelectTrigger className="h-8 text-xs">
-                  <Filter className="w-3 h-3 mr-1" />
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
-                  <SelectItem value="pending">Pending</SelectItem>
-                  <SelectItem value="scheduled">Scheduled</SelectItem>
-                  <SelectItem value="completed">Completed</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="grid grid-cols-2 gap-3">
+                <Select value={filter} onValueChange={handleFilterChange}>
+                  <SelectTrigger className="h-10">
+                    <Filter className="w-4 h-4 mr-2" />
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Status</SelectItem>
+                    <SelectItem value="pending">Pending</SelectItem>
+                    <SelectItem value="scheduled">Scheduled</SelectItem>
+                    <SelectItem value="completed">Completed</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                  </SelectContent>
+                </Select>
 
-              <Input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => handleDateChange(e.target.value)}
-                className="h-8 text-xs"
-              />
+                <Input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => handleDateChange(e.target.value)}
+                  className="h-10"
+                />
+              </div>
 
-              <Button type="submit" variant="outline" size="sm" className="w-full h-8 text-xs bg-transparent">
+              <Button type="submit" variant="outline" className="w-full h-10 bg-transparent">
                 Apply Filters
               </Button>
             </form>
 
             {/* Advanced Options */}
-            <div className="space-y-2">
+            <div className="space-y-3 pt-2 border-t">
+              <div className="text-sm font-medium text-foreground">Advanced Options</div>
               {user?.publicMetadata?.role === "teacher" && (
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-3">
                   <input
                     type="checkbox"
                     id="includeAvailability"
                     checked={includeAvailability}
                     onChange={(e) => setIncludeAvailability(e.target.checked)}
-                    className="w-3 h-3"
+                    className="w-4 h-4"
                   />
-                  <label htmlFor="includeAvailability" className="text-xs text-muted-foreground">
-                    Include availability
+                  <label htmlFor="includeAvailability" className="text-sm text-muted-foreground">
+                    Include availability slots
                   </label>
                 </div>
               )}
 
               {user?.publicMetadata?.role === "student" && (
-                <div className="flex items-center space-x-2">
+                <div className="flex items-center space-x-3">
                   <input
                     type="checkbox"
                     id="useVectorSearch"
                     checked={useVectorSearch}
                     onChange={(e) => setUseVectorSearch(e.target.checked)}
-                    className="w-3 h-3"
+                    className="w-4 h-4"
                   />
-                  <label htmlFor="useVectorSearch" className="text-xs text-muted-foreground">
-                    AI recommendations
+                  <label htmlFor="useVectorSearch" className="text-sm text-muted-foreground">
+                    Enable AI recommendations
                   </label>
                 </div>
               )}
@@ -484,58 +493,55 @@ export function SchedulesSidebar() {
 
         {/* Sessions List */}
         <SidebarGroup>
-          <SidebarGroupLabel>Sessions</SidebarGroupLabel>
+          <SidebarGroupLabel className="text-base font-medium">Sessions</SidebarGroupLabel>
           <SidebarGroupContent>
             {loading ? (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {[...Array(3)].map((_, i) => (
-                  <Card key={i} className="p-3">
-                    <Skeleton className="h-4 w-3/4 mb-2" />
-                    <Skeleton className="h-3 w-full mb-1" />
-                    <Skeleton className="h-3 w-1/2" />
+                  <Card key={i} className="p-4">
+                    <Skeleton className="h-5 w-3/4 mb-3" />
+                    <Skeleton className="h-4 w-full mb-2" />
+                    <Skeleton className="h-4 w-1/2" />
                   </Card>
                 ))}
               </div>
             ) : sessions.length === 0 ? (
-              <Card className="p-4 text-center">
-                <Calendar className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                <p className="text-xs text-muted-foreground">
-                  {searchTerm || filter !== "all" || selectedDate 
-                    ? "No sessions match your filters" 
-                    : "No sessions found"
-                  }
+              <Card className="p-6 text-center">
+                <Calendar className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                <p className="text-sm text-muted-foreground mb-4">
+                  {searchTerm || filter !== "all" || selectedDate
+                    ? "No sessions match your current filters"
+                    : "No sessions found"}
                 </p>
                 {user?.publicMetadata?.role === "teacher" && !searchTerm && filter === "all" && !selectedDate && (
-                  <Button size="sm" className="mt-2" onClick={handleCreateSession}>
-                    <Plus className="w-3 h-3 mr-1" />
-                    Create First Session
+                  <Button onClick={handleCreateSession}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Create Your First Session
                   </Button>
                 )}
               </Card>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-4">
                 {sessions.map((session) => (
                   <Card
                     key={session._id}
-                    className="p-3 hover:shadow-md transition-shadow cursor-pointer"
+                    className="p-4 hover:shadow-lg transition-all duration-200 cursor-pointer border-l-4 border-l-primary/20 hover:border-l-primary"
                     onClick={() => handleViewDetails(session._id)}
                   >
-                    <div className="space-y-2">
+                    <div className="space-y-3">
                       <div className="flex items-start justify-between">
-                        <div className="flex-1 pr-2">
-                          <h4 className="text-sm font-medium text-foreground truncate">
-                            {session.topic}
-                          </h4>
+                        <div className="flex-1 pr-3">
+                          <h4 className="text-base font-semibold text-foreground mb-1 line-clamp-2">{session.topic}</h4>
                           {session.similarityScore !== undefined && (
-                            <div className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                              Match: {Math.round(session.similarityScore * 100)}%
+                            <div className="text-sm text-blue-600 dark:text-blue-400 mb-2">
+                              AI Match: {Math.round(session.similarityScore * 100)}%
                             </div>
                           )}
                         </div>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                            <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                              <MoreHorizontal className="w-3 h-3" />
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
+                              <MoreHorizontal className="w-4 h-4" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent>
@@ -545,7 +551,7 @@ export function SchedulesSidebar() {
                                 handleViewDetails(session._id)
                               }}
                             >
-                              <Eye className="w-3 h-3 mr-2" />
+                              <Eye className="w-4 h-4 mr-2" />
                               View Details
                             </DropdownMenuItem>
                             {user?.publicMetadata?.role === "teacher" && (
@@ -556,8 +562,8 @@ export function SchedulesSidebar() {
                                     handleEditSession(session._id)
                                   }}
                                 >
-                                  <Edit className="w-3 h-3 mr-2" />
-                                  Edit
+                                  <Edit className="w-4 h-4 mr-2" />
+                                  Edit Session
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   className="text-destructive focus:text-destructive"
@@ -566,8 +572,8 @@ export function SchedulesSidebar() {
                                     handleDeleteSession(session._id)
                                   }}
                                 >
-                                  <Trash2 className="w-3 h-3 mr-2" />
-                                  Delete
+                                  <Trash2 className="w-4 h-4 mr-2" />
+                                  Delete Session
                                 </DropdownMenuItem>
                               </>
                             )}
@@ -575,51 +581,54 @@ export function SchedulesSidebar() {
                         </DropdownMenu>
                       </div>
 
-                      <Badge className={`${getStatusColor(session.status)} text-xs`}>
+                      <Badge className={`${getStatusColor(session.status)} text-sm px-3 py-1`}>
                         {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
                       </Badge>
 
-                      <div className="space-y-1">
-                        <div className="flex items-center gap-2 text-xs text-foreground">
-                          <Calendar className="w-3 h-3 text-primary" />
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-3 text-sm text-foreground">
+                          <Calendar className="w-4 h-4 text-primary" />
                           <span>{formatDate(session.schedule?.date)}</span>
                         </div>
 
-                        <div className="flex items-center gap-2 text-xs text-foreground">
-                          <Clock className="w-3 h-3 text-primary" />
+                        <div className="flex items-center gap-3 text-sm text-foreground">
+                          <Clock className="w-4 h-4 text-primary" />
                           <span>{formatTimeSlot(session)}</span>
                         </div>
 
                         <Collapsible>
                           <CollapsibleTrigger
-                            className="flex items-center gap-2 text-xs text-foreground hover:text-primary transition-colors w-full"
+                            className="flex items-center gap-3 text-sm text-foreground hover:text-primary transition-colors w-full"
                             onClick={(e) => {
                               e.stopPropagation()
                               toggleSessionExpansion(session._id)
                             }}
                           >
-                            <Users className="w-3 h-3 text-primary" />
+                            <Users className="w-4 h-4 text-primary" />
                             <span>
-                              {session.totalStudents || 0} student{session.totalStudents !== 1 ? "s" : ""}
+                              {session.totalStudents || 0} student{session.totalStudents !== 1 ? "s" : ""} enrolled
                             </span>
                             {session.totalStudents > 0 && (
-                              <ChevronDown className="w-3 h-3 text-muted-foreground ml-auto" />
+                              <ChevronDown className="w-4 h-4 text-muted-foreground ml-auto" />
                             )}
                           </CollapsibleTrigger>
 
-                          <CollapsibleContent className="mt-2">{renderEnrolledStudents(session)}</CollapsibleContent>
+                          <CollapsibleContent className="mt-3">{renderEnrolledStudents(session)}</CollapsibleContent>
                         </Collapsible>
                       </div>
 
-                      <div className="flex items-center gap-2 p-2 bg-muted/30 rounded text-xs">
-                        <div className="w-5 h-5 bg-primary rounded-full flex items-center justify-center">
-                          <span className="text-primary-foreground text-[10px] font-semibold">
+                      <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg">
+                        <div className="w-8 h-8 bg-primary rounded-full flex items-center justify-center">
+                          <span className="text-primary-foreground text-sm font-semibold">
                             {session.teacherId?.name?.charAt(0) || "T"}
                           </span>
                         </div>
-                        <span className="text-foreground font-medium truncate">
-                          {session.teacherId?.name || "Unknown Instructor"}
-                        </span>
+                        <div>
+                          <div className="text-sm font-medium text-foreground">
+                            {session.teacherId?.name || "Unknown Instructor"}
+                          </div>
+                          <div className="text-xs text-muted-foreground">Instructor</div>
+                        </div>
                       </div>
                     </div>
                   </Card>
@@ -632,17 +641,9 @@ export function SchedulesSidebar() {
         </SidebarGroup>
       </SidebarContent>
 
-      <SidebarFooter className="p-4">
-        <Button
-          variant="outline"
-          size="sm"
-          className="w-full text-xs bg-transparent"
-          onClick={() => router.push("/sessions")}
-        >
-          View Full Schedule
-        </Button>
+      <SidebarFooter className="p-6">
         {stats.total > 0 && (
-          <div className="text-xs text-muted-foreground text-center mt-2">
+          <div className="text-sm text-muted-foreground text-center">
             Showing {sessions.length} of {stats.total} sessions
           </div>
         )}
