@@ -29,6 +29,7 @@ const DashboardPage = () => {
 
   // Load conversation from local storage on component mount
   useEffect(() => {
+    
     const loadConversation = () => {
       try {
         const savedTimestamp = localStorage.getItem(CONVERSATION_TIMESTAMP_KEY)
@@ -113,6 +114,11 @@ const DashboardPage = () => {
           console.error("Sync failed:", error)
           toast.error("Failed to sync user data")
         }
+      }
+      else if (isLoaded && !isSignedIn) {
+        // Redirect to sign-in page if not signed in
+        toast.error("You must be signed in to access the dashboard")
+        router.push("/")
       }
     }
 

@@ -8,7 +8,7 @@ import connectDB from '@/config/db';
 
 // Initialize OpenAI with modern configuration
 const openai = new OpenAI({
-  apiKey:process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 // Initialize Pinecone with latest configuration

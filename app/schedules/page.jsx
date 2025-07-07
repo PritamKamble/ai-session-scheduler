@@ -8,8 +8,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { useRouter } from "next/navigation"
-import { toast } from "sonner"
+import { redirect, useRouter } from "next/navigation"
+import toast, { Toaster } from "react-hot-toast"
 import { useUser } from "@clerk/nextjs"
 import Link from "next/link"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -43,6 +43,7 @@ const ModernSessionsPage = () => {
     today: 0
   })
   
+
   const router = useRouter()
   const { isLoaded, user } = useUser()
 
@@ -50,13 +51,19 @@ const ModernSessionsPage = () => {
     if (isLoaded && user) {
       fetchSessions()
     }
+    if (!user){
+      toast.error("You must be logged in to access the dashboard")
+      setTimeout(() => {
+        // Redirect to home page after showing the error
+        router.push("/")
+      }, 1000) // Redirect after 2 seconds
+      return
+    }
   }, [filter, selectedDate, includeAvailability, isLoaded, user])
 
   const fetchSessions = async () => {
     try {
       setLoading(true)
-      
-      if (!user) return
       
       // Build query parameters
       const params = new URLSearchParams()
@@ -238,7 +245,18 @@ const ModernSessionsPage = () => {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
+    <>
+    <Toaster
+        position="top-right"
+        toastOptions={{
+          style: {
+            background: "hsl(var(--background))",
+            color: "hsl(var(--foreground))",
+            border: "1px solid hsl(var(--border))",
+          },
+        }}
+      />
+      <div className="min-h-screen bg-gradient-to-br from-background via-background to-muted/20">
       {/* Header */}
       <div className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-8">
@@ -577,6 +595,7 @@ const ModernSessionsPage = () => {
         )}
       </div>
     </div>
+    </>
   )
 }
 

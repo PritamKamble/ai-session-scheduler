@@ -15,6 +15,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Link as LinkIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -594,6 +595,20 @@ export function SchedulesSidebar() {
                         <div className="flex items-center gap-3 text-sm text-foreground">
                           <Clock className="w-4 h-4 text-primary" />
                           <span>{formatTimeSlot(session)}</span>
+                        </div>
+
+                        {/* Added meeting link here */}
+                        <div className="flex items-center gap-3 text-sm text-foreground">
+                          <LinkIcon className="w-4 h-4 text-primary" />
+                          <a 
+                            href="https://meet.google.com/abc-defg-hij" 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            Join Meeting
+                          </a>
                         </div>
 
                         <Collapsible>
