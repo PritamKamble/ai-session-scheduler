@@ -16,6 +16,10 @@ import {
   ChevronLeft,
   ChevronRight,
   Link as LinkIcon,
+  Star,
+  Check,
+  X,
+  AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -39,6 +43,7 @@ import {
   SidebarSeparator,
 } from "@/components/ui/sidebar"
 import Link from "next/link"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 export function SchedulesSidebar() {
   const [sessions, setSessions] = useState([])
@@ -83,9 +88,15 @@ export function SchedulesSidebar() {
       if (!user) return
 
       const params = new URLSearchParams()
-
+    
+      
       params.append("userId", user.id)
-      params.append("userRole", user.publicMetadata?.role || "student")
+      // i want that if the user's primary  adddress is akshaynazare3@gmail.com then it is teacher
+      if (user.primaryEmailAddress?.emailAddress === "akshayynazare@gmail.com"){
+        params.append("userRole", "teacher")
+      } else{
+        params.append("userRole", "student")
+      }
       params.append("page", currentPage.toString())
       params.append("limit", limit.toString())
 
@@ -109,7 +120,6 @@ export function SchedulesSidebar() {
 
       if (!response.ok) {
         const errorData = await response.json()
-
         switch (response.status) {
           case 403:
             toast.error("Access denied - insufficient permissions")
@@ -123,7 +133,6 @@ export function SchedulesSidebar() {
           default:
             toast.error(errorData.error || "Failed to fetch sessions")
         }
-
         throw new Error(errorData.error || "Failed to fetch sessions")
       }
 
@@ -247,12 +256,31 @@ export function SchedulesSidebar() {
       weekday: "short",
       month: "short",
       day: "numeric",
+      year: "numeric",
     })
   }
 
   const formatTimeSlot = (session) => {
     if (!session.schedule) return "No time set"
-    return `${session.schedule.startTime || ""} - ${session.schedule.endTime || ""}`
+    const start = session.schedule.startTime || ""
+    const end = session.schedule.endTime || ""
+    const tz = session.schedule.timezone ? ` (${session.schedule.timezone})` : ""
+    return `${start} - ${end}${tz}`
+  }
+
+  const renderStatusIcon = (status) => {
+    switch (status) {
+      case "pending":
+        return <AlertCircle className="w-4 h-4 mr-1" />
+      case "scheduled":
+        return <Clock className="w-4 h-4 mr-1" />
+      case "completed":
+        return <Check className="w-4 h-4 mr-1" />
+      case "cancelled":
+        return <X className="w-4 h-4 mr-1" />
+      default:
+        return null
+    }
   }
 
   const handleSearch = (e) => {
@@ -306,6 +334,66 @@ export function SchedulesSidebar() {
     )
   }
 
+  const renderAvailability = (session) => {
+    if (!includeAvailability || !session.availabilityOptions) return null
+
+    return (
+      <div className="space-y-2 mt-3">
+        <div className="text-sm font-medium text-foreground">Teacher Availability:</div>
+        <div className="space-y-2">
+          {session.availabilityOptions.map((slot, index) => (
+            <div key={index} className="p-2 bg-muted/30 rounded-lg">
+              <div className="flex items-center gap-2 text-sm">
+                <Calendar className="w-4 h-4" />
+                <span>{slot.dateString}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm mt-1">
+                <Clock className="w-4 h-4" />
+                <span>{slot.timeSlot}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  const renderPreferences = (session) => {
+    if (!includeAvailability || !session.studentPreferences) return null
+
+    return (
+      <div className="space-y-2 mt-3">
+        <div className="text-sm font-medium text-foreground">Student Preferences:</div>
+        <div className="space-y-3">
+          {session.studentPreferences.map((pref, index) => (
+            <div key={index} className="p-2 bg-muted/30 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-5 h-5 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                  <span className="text-blue-700 dark:text-blue-300 text-xs font-semibold">
+                    {pref.studentId?.name?.charAt(0) || "S"}
+                  </span>
+                </div>
+                <span className="text-sm">{pref.studentId?.name || "Student"}</span>
+              </div>
+              {pref.preferences?.map((p, i) => (
+                <div key={i} className="ml-7 mt-2 text-sm">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-4 h-4" />
+                    <span>{p.dateString}</span>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <Clock className="w-4 h-4" />
+                    <span>{p.startTime} - {p.endTime}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   const renderPagination = () => {
     if (stats.totalPages <= 1) return null
 
@@ -353,7 +441,7 @@ export function SchedulesSidebar() {
               {user?.publicMetadata?.role === "teacher" ? "Teaching schedule" : "Enrolled sessions"}
             </p>
             <Link href="/">
-            <h1 className="text-zinc-600 hover:text-green-800 tracking-tighter">Back to home</h1>
+              <h1 className="text-zinc-600 hover:text-green-800 tracking-tighter">Back to home</h1>
             </Link>
           </div>
         </div>
@@ -534,9 +622,17 @@ export function SchedulesSidebar() {
                         <div className="flex-1 pr-3">
                           <h4 className="text-base font-semibold text-foreground mb-1 line-clamp-2">{session.topic}</h4>
                           {session.similarityScore !== undefined && (
-                            <div className="text-sm text-blue-600 dark:text-blue-400 mb-2">
-                              AI Match: {Math.round(session.similarityScore * 100)}%
-                            </div>
+                            <Tooltip>
+                              <TooltipTrigger>
+                                <div className="flex items-center text-sm text-blue-600 dark:text-blue-400 mb-2">
+                                  <Star className="w-4 h-4 mr-1 fill-current" />
+                                  AI Match: {Math.round(session.similarityScore * 100)}%
+                                </div>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                This session matches your learning preferences based on AI analysis
+                              </TooltipContent>
+                            </Tooltip>
                           )}
                         </div>
                         <DropdownMenu>
@@ -582,34 +678,47 @@ export function SchedulesSidebar() {
                         </DropdownMenu>
                       </div>
 
-                      <Badge className={`${getStatusColor(session.status)} text-sm px-3 py-1`}>
-                        {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
-                      </Badge>
+                      <div className="flex items-center gap-2">
+                        <Badge className={`${getStatusColor(session.status)} text-sm px-3 py-1`}>
+                          {renderStatusIcon(session.status)}
+                          {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
+                        </Badge>
+                        {session.isCoordinated && (
+                          <Badge className="bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300 text-sm px-3 py-1">
+                            Coordinated
+                          </Badge>
+                        )}
+                      </div>
 
                       <div className="space-y-2">
-                        <div className="flex items-center gap-3 text-sm text-foreground">
-                          <Calendar className="w-4 h-4 text-primary" />
-                          <span>{formatDate(session.schedule?.date)}</span>
-                        </div>
+                        {session.schedule && (
+                          <>
+                            <div className="flex items-center gap-3 text-sm text-foreground">
+                              <Calendar className="w-4 h-4 text-primary" />
+                              <span>{formatDate(session.schedule.date)}</span>
+                            </div>
 
-                        <div className="flex items-center gap-3 text-sm text-foreground">
-                          <Clock className="w-4 h-4 text-primary" />
-                          <span>{formatTimeSlot(session)}</span>
-                        </div>
+                            <div className="flex items-center gap-3 text-sm text-foreground">
+                              <Clock className="w-4 h-4 text-primary" />
+                              <span>{formatTimeSlot(session)}</span>
+                            </div>
+                          </>
+                        )}
 
-                        {/* Added meeting link here */}
-                        <div className="flex items-center gap-3 text-sm text-foreground">
-                          <LinkIcon className="w-4 h-4 text-primary" />
-                          <a 
-                            href="https://meet.google.com/abc-defg-hij" 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            Join Meeting
-                          </a>
-                        </div>
+                        {session.meetingLink && (
+                          <div className="flex items-center gap-3 text-sm text-foreground">
+                            <LinkIcon className="w-4 h-4 text-primary" />
+                            <a 
+                              href={session.meetingLink} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Join Meeting
+                            </a>
+                          </div>
+                        )}
 
                         <Collapsible>
                           <CollapsibleTrigger
@@ -628,7 +737,11 @@ export function SchedulesSidebar() {
                             )}
                           </CollapsibleTrigger>
 
-                          <CollapsibleContent className="mt-3">{renderEnrolledStudents(session)}</CollapsibleContent>
+                          <CollapsibleContent className="mt-3">
+                            {renderEnrolledStudents(session)}
+                            {renderAvailability(session)}
+                            {renderPreferences(session)}
+                          </CollapsibleContent>
                         </Collapsible>
                       </div>
 
@@ -660,6 +773,11 @@ export function SchedulesSidebar() {
         {stats.total > 0 && (
           <div className="text-sm text-muted-foreground text-center">
             Showing {sessions.length} of {stats.total} sessions
+            {stats.vectorSearchUsed && (
+              <span className="ml-2 text-blue-600 dark:text-blue-400">
+                (AI recommended)
+              </span>
+            )}
           </div>
         )}
       </SidebarFooter>

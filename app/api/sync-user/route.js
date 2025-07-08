@@ -5,7 +5,6 @@ import connectDB from '@/config/db';
 export async function POST(req) {
     try {
         await connectDB();
-        console.log(process.env.OPENAI_API_KEY, process.env.PINECONE_API_KEY);
         const { clerkId, userName, email, firstName, lastName, profileImage, role, metadata } = await req.json();
 
         if (!clerkId) {
@@ -16,7 +15,7 @@ export async function POST(req) {
         }
 
         // Determine role
-        const teacherEmails = ['7276279026.pk@gmail.com', 'arjun6mahato@gmail.com'];
+        const teacherEmails = ['7276279026.pk@gmail.com', 'arjun6mahato@gmail.com','akshayynazare@gmail.com'];
         const userRole = teacherEmails.includes(email) ? 'teacher' : (role || 'student');
 
         // Prepare update data
