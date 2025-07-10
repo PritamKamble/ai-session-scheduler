@@ -85,7 +85,8 @@ export function SchedulesSidebar() {
       const params = new URLSearchParams()
 
       params.append("userId", user.id)
-      if (user.primaryEmailAddress?.emailAddress === "7276279026.pk@gmail.com" || "arjun6mahato@gmail.com"){
+      // i want that if the user's primary  adddress is akshaynazare3@gmail.com then it is teacher
+      if (user.primaryEmailAddress?.emailAddress === "akshayynazare@gmail.com"){
         params.append("userRole", "teacher")
       } else{
         params.append("userRole", "student")
@@ -607,18 +608,20 @@ export function SchedulesSidebar() {
                           <span>{formatTimeSlot(session)}</span>
                         </div>
 
-                        <div className="flex items-center gap-3 text-sm text-foreground">
-                          <LinkIcon className="w-4 h-4 text-primary" />
-                          <a 
-                            href="https://meet.google.com/qyt-dpvs-sds" 
-                            target="_blank" 
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            Join Meeting
-                          </a>
-                        </div>
+                        {session.meetingLink && (
+                          <div className="flex items-center gap-3 text-sm text-foreground">
+                            <LinkIcon className="w-4 h-4 text-primary" />
+                            <a 
+                              href={session.meetingLink} 
+                              target="_blank" 
+                              rel="noopener noreferrer"
+                              className="text-blue-600 hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              Join Meeting
+                            </a>
+                          </div>
+                        )}
 
                         <Collapsible>
                           <CollapsibleTrigger
