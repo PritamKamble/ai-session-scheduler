@@ -78,7 +78,7 @@ export default function Home() {
                 
                 <TypingPromptInput />
                 
-                
+                <Button>Test -  ( not workinf )</Button>
               </div>
             </div>
           </section>
