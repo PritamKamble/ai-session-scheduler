@@ -42,7 +42,7 @@ export async function GET(request) {
       }
     };
     
-    // Find user if userId is provided
+    // Find user if clerkId is provided
     if (userId) {
       user = await findUserByClerkId(userId);
       if (!user) {
@@ -80,64 +80,60 @@ export async function GET(request) {
       // Enhanced vector search for students
       if (useVectorSearch) {
         try {
-          // Check if Context model exists and queryPineconeVectorStore function is available
-          if (typeof Context !== 'undefined' && typeof queryPineconeVectorStore === 'function') {
-            // Find the most recent context for this student user
-            const latestContext = await Context.findOne({ 
-              userId: user._id,
-              role: 'student'
-            })
-              .sort({ timestamp: -1 })
-              .limit(1)
-              .lean();
+          // Find the most recent context for this student user
+          const latestContext = await Context.findOne({ 
+            userId: user._id,
+            role: 'student' // Match the role field in your schema
+          })
+            .sort({ timestamp: -1 })
+            .limit(1)
+            .lean();
+          
+          if (latestContext?.embedding?.length > 0) {
+            console.log(`Using context embedding for user ${user._id}, message: "${latestContext.message.substring(0, 50)}..."`);
             
-            if (latestContext?.embedding?.length > 0) {
-              console.log(`Using context embedding for user ${user._id}, message: "${latestContext.message.substring(0, 50)}..."`);
-              
-              // Build vector search filters
-              const vectorFilters = {
-                studentIds: [user._id.toString()],
-                ...(status && { status }),
-                ...(date && { 
-                  date: {
-                    $gte: new Date(date + 'T00:00:00.000Z').toISOString(),
-                    $lte: new Date(date + 'T23:59:59.999Z').toISOString()
-                  }
-                }),
-                ...(topic && { topic })
-              };
-              
-              vectorResults = await queryPineconeVectorStore({
-                userId: user._id.toString(),
-                embedding: latestContext.embedding,
-                filter: vectorFilters,
-                topK: Math.min(limit * 2, 20),
-                minScore
-              });
-              
-              if (vectorResults?.length > 0) {
-                console.log(`Vector search found ${vectorResults.length} relevant sessions`);
-                // Combine vector results with regular query
-                const vectorSessionIds = vectorResults.map(r => {
-                  try {
-                    return new mongoose.Types.ObjectId(r.id);
-                  } catch (err) {
-                    console.warn(`Invalid ObjectId in vector results: ${r.id}`);
-                    return null;
-                  }
-                }).filter(Boolean);
-                
-                if (vectorSessionIds.length > 0) {
-                  query._id = { $in: vectorSessionIds };
+            // Build vector search filters - align with your session structure
+            const vectorFilters = {
+              studentIds: [user._id.toString()],
+              ...(status && { status }),
+              ...(date && { 
+                date: {
+                  $gte: new Date(date + 'T00:00:00.000Z').toISOString(),
+                  $lte: new Date(date + 'T23:59:59.999Z').toISOString()
                 }
-              } else {
-                console.log('No vector results found with sufficient similarity, using regular search');
+              }),
+              ...(topic && { topic })
+            };
+            
+            vectorResults = await queryPineconeVectorStore({
+              userId: user._id.toString(),
+              embedding: latestContext.embedding,
+              filter: vectorFilters,
+              topK: Math.min(limit * 2, 20), // Get more results for better filtering
+              minScore
+            });
+            
+            if (vectorResults?.length > 0) {
+              console.log(`Vector search found ${vectorResults.length} relevant sessions`);
+              // Combine vector results with regular query
+              const vectorSessionIds = vectorResults.map(r => {
+                try {
+                  return new mongoose.Types.ObjectId(r.id);
+                } catch (err) {
+                  console.warn(`Invalid ObjectId in vector results: ${r.id}`);
+                  return null;
+                }
+              }).filter(Boolean);
+              
+              if (vectorSessionIds.length > 0) {
+                query._id = { $in: vectorSessionIds };
               }
             } else {
-              console.log('No valid embedding found in latest context, using regular search');
+              // No vector results found, fall back to regular search
+              console.log('No vector results found with sufficient similarity, using regular search');
             }
           } else {
-            console.log('Vector search not available, using regular search');
+            console.log('No valid embedding found in latest context, using regular search');
           }
         } catch (contextError) {
           console.error('Vector search error:', contextError);

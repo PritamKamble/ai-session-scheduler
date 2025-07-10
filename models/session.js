@@ -328,8 +328,6 @@ sessionSchema.pre('save', function(next) {
   }
 });
 
-
-
 // Pre-save middleware to ensure proper student enrollment
 sessionSchema.pre('save', function(next) {
   try {
