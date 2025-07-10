@@ -8,7 +8,7 @@ import connectDB from '@/config/db';
 
 // Initialize OpenAI with modern configuration
 const openai = new OpenAI({
-  apiKey: "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",
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 // Initialize Pinecone with latest configuration
