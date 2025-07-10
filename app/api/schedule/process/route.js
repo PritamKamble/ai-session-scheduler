@@ -8,7 +8,7 @@ import connectDB from '@/config/db';
 
 // Initialize OpenAI with modern configuration
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: "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",
 });
 
 // Initialize Pinecone with latest configuration
@@ -501,6 +501,7 @@ Keep response concise and helpful.`;
 }
 
 // Student processing logic - Students can only join and influence timing
+// FIXED: Student processing logic - Students can only join and influence timing
 async function handleStudentInput(user, message, embedding, session, context, res) {
   try {
     const contextString = context.conversationHistory.length > 0 
@@ -574,19 +575,19 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
 
     // Process availability dates and times
     if (extractedData.availability) {
-  extractedData.availability = extractedData.availability.map(slot => {
-    if (!slot.date && slot.day) {
-      const calculatedDate = calculateDateFromRelative(slot.day);
-      slot.date = calculatedDate;
-    } else if (typeof slot.date === 'string') {
-      slot.date = new Date(slot.date + 'T00:00:00.000Z');
+      extractedData.availability = extractedData.availability.map(slot => {
+        if (!slot.date && slot.day) {
+          const calculatedDate = calculateDateFromRelative(slot.day);
+          slot.date = calculatedDate;
+        } else if (typeof slot.date === 'string') {
+          slot.date = new Date(slot.date + 'T00:00:00.000Z');
+        }
+        
+        slot.startTime = convertTo24Hour(slot.startTime);
+        slot.endTime = convertTo24Hour(slot.endTime);
+        return slot;
+      }).filter(slot => slot.date && validateFutureDate(slot.date));
     }
-    
-    slot.startTime = convertTo24Hour(slot.startTime);
-    slot.endTime = convertTo24Hour(slot.endTime);
-    return slot;
-  }).filter(slot => slot.date && validateFutureDate(slot.date));
-}
 
     let sessionAction = 'none';
     let matchingSessions = [];
@@ -602,64 +603,133 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       await session.save();
       sessionAction = 'left_session';
     }
-    // Handle joining or timing updates
-    else if (extractedData.topics && extractedData.topics.length > 0) {
-      // Find matching sessions
+    // FIXED: Handle joining or timing updates - Check for topics OR general session joining
+    else if ((extractedData.topics && extractedData.topics.length > 0) || extractedData.isJoinRequest) {
+      // FIXED: Find matching sessions - Include sessions with students already enrolled
       matchingSessions = await Session.find({
-        $or: [
-          { topic: { $in: extractedData.topics } },
-          { topic: { $regex: extractedData.topics.join('|'), $options: 'i' } }
-        ],
-        status: { $in: ['pending', 'coordinated'] },
-        teacherId: { $exists: true, $ne: null }
+        $and: [
+          // FIXED: Match by topic if provided, otherwise find any available session
+          extractedData.topics && extractedData.topics.length > 0 ? {
+            $or: [
+              { topic: { $in: extractedData.topics } },
+              { topic: { $regex: extractedData.topics.join('|'), $options: 'i' } }
+            ]
+          } : { topic: { $exists: true } },
+          // FIXED: Include sessions that are pending, coordinated, OR scheduled
+          { status: { $in: ['pending', 'coordinated', 'scheduled'] } },
+          { teacherId: { $exists: true, $ne: null } }
+        ]
       })
       .populate('teacherId', 'name email')
+      .populate('studentIds', 'name email') // FIXED: Also populate student info for debugging
       .limit(5);
 
-      // If student wants to join and there are matching sessions
-      if (extractedData.isJoinRequest && matchingSessions.length > 0) {
-  const bestMatch = matchingSessions[0];
-  
-  // FIX: Proper ObjectId comparison
-  const isAlreadyEnrolled = bestMatch.studentIds.some(id => id.toString() === user._id.toString());
-  
-  if (!isAlreadyEnrolled) {
-    bestMatch.studentIds.push(user._id);
-    
-    // Add timing preferences if provided
-    if (extractedData.availability && extractedData.availability.length > 0) {
-      if (!bestMatch.studentTimingPreferences) {
-        bestMatch.studentTimingPreferences = [];
-      }
+      console.log(`Found ${matchingSessions.length} matching sessions for student ${user.name}`);
       
-      bestMatch.studentTimingPreferences.push({
-        studentId: user._id,
-        preferences: extractedData.availability,
-        updatedAt: new Date()
-      });
-
-      // Coordinate timing with teacher availability
-      if (bestMatch.teacherAvailability) {
-        const optimalTiming = findOptimalTiming(
-          bestMatch.teacherAvailability,
-          extractedData.availability
+      // FIXED: If student wants to join and there are matching sessions
+      if (extractedData.isJoinRequest && matchingSessions.length > 0) {
+        const bestMatch = matchingSessions[0];
+        
+        console.log(`Checking enrollment for student ${user._id} in session ${bestMatch._id}`);
+        console.log(`Current students: ${bestMatch.studentIds.map(s => s._id).join(', ')}`);
+        
+        // FIXED: Proper ObjectId comparison using toString()
+        const isAlreadyEnrolled = bestMatch.studentIds.some(student => 
+          student._id.toString() === user._id.toString()
         );
         
-        if (optimalTiming) {
-  bestMatch.schedule = optimalTiming;
-  bestMatch.status = 'scheduled'; // Changed from 'coordinated'
-}
+        console.log(`Student already enrolled: ${isAlreadyEnrolled}`);
+        
+        if (!isAlreadyEnrolled) {
+          bestMatch.studentIds.push(user._id);
+          
+          // Add timing preferences if provided
+          if (extractedData.availability && extractedData.availability.length > 0) {
+            if (!bestMatch.studentTimingPreferences) {
+              bestMatch.studentTimingPreferences = [];
+            }
+            
+            bestMatch.studentTimingPreferences.push({
+              studentId: user._id,
+              preferences: extractedData.availability,
+              updatedAt: new Date()
+            });
+
+            // Coordinate timing with teacher availability
+            if (bestMatch.teacherAvailability) {
+              const optimalTiming = findOptimalTiming(
+                bestMatch.teacherAvailability,
+                extractedData.availability
+              );
+              
+              if (optimalTiming) {
+                bestMatch.schedule = optimalTiming;
+                bestMatch.status = 'scheduled';
+              }
+            }
+          }
+          
+          await bestMatch.save();
+          session = bestMatch;
+          sessionAction = 'joined_session';
+          
+          console.log(`Student ${user.name} successfully joined session ${bestMatch._id}`);
+        } else {
+          session = bestMatch;
+          sessionAction = 'already_enrolled';
+          
+          console.log(`Student ${user.name} already enrolled in session ${bestMatch._id}`);
+        }
       }
-    }
-    
-    await bestMatch.save();
-    session = bestMatch;
-    sessionAction = 'joined_session';
-  } else {
-    session = bestMatch;
-    sessionAction = 'already_enrolled';
-  }
-}
+      // FIXED: Handle case where no isJoinRequest but topics are provided
+      else if (extractedData.topics && extractedData.topics.length > 0 && !extractedData.isJoinRequest) {
+        // FIXED: Set default join request to true if topics are mentioned
+        extractedData.isJoinRequest = true;
+        
+        if (matchingSessions.length > 0) {
+          const bestMatch = matchingSessions[0];
+          const isAlreadyEnrolled = bestMatch.studentIds.some(student => 
+            student._id.toString() === user._id.toString()
+          );
+          
+          if (!isAlreadyEnrolled) {
+            bestMatch.studentIds.push(user._id);
+            
+            if (extractedData.availability && extractedData.availability.length > 0) {
+              if (!bestMatch.studentTimingPreferences) {
+                bestMatch.studentTimingPreferences = [];
+              }
+              
+              bestMatch.studentTimingPreferences.push({
+                studentId: user._id,
+                preferences: extractedData.availability,
+                updatedAt: new Date()
+              });
+
+              if (bestMatch.teacherAvailability) {
+                const optimalTiming = findOptimalTiming(
+                  bestMatch.teacherAvailability,
+                  extractedData.availability
+                );
+                
+                if (optimalTiming) {
+                  bestMatch.schedule = optimalTiming;
+                  bestMatch.status = 'scheduled';
+                }
+              }
+            }
+            
+            await bestMatch.save();
+            session = bestMatch;
+            sessionAction = 'joined_session';
+          } else {
+            session = bestMatch;
+            sessionAction = 'already_enrolled';
+          }
+        } else {
+          sessionAction = 'no_matching_sessions';
+        }
+      }
       // Handle timing updates for existing session
       else if (session && extractedData.isTimingUpdate && extractedData.availability) {
         if (!session.studentTimingPreferences) {
@@ -689,10 +759,10 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
             allStudentPrefs
           );
           
-         if (optimalTiming) {
-  session.schedule = optimalTiming;
-  session.status = 'scheduled'; // Changed from 'coordinated'
-}
+          if (optimalTiming) {
+            session.schedule = optimalTiming;
+            session.status = 'scheduled';
+          }
         }
         
         await session.save();

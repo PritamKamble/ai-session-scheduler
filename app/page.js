@@ -78,11 +78,7 @@ export default function Home() {
                 
                 <TypingPromptInput />
                 
-                <div className="flex flex-wrap justify-center gap-3 mt-16">
-                  <Button className="px-5 py-5 h-[50px] rounded-xl border-2 border-gray-300 dark:border-gray-600 bg-transparent hover:bg-gray-100 dark:hover:bg-gray-800 text-[15px] font-medium text-foreground">
-                    Learn More
-                  </Button>
-                </div>
+                
               </div>
             </div>
           </section>
