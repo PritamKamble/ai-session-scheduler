@@ -86,7 +86,7 @@ export function SchedulesSidebar() {
 
       params.append("userId", user.id)
       // i want that if the user's primary  adddress is akshaynazare3@gmail.com then it is teacher
-      if (user.primaryEmailAddress?.emailAddress === "akshayynazare@gmail.com"){
+      if (user.primaryEmailAddress?.emailAddress === "7276279026.pk@gmail.com" || "arjun6mahato@gmail.com" ){
         params.append("userRole", "teacher")
       } else{
         params.append("userRole", "student")
