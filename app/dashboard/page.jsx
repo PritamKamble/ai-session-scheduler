@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Send } from "lucide-react"
+import { Send, Users, Calendar, Clock, User, BookOpen, ArrowRight, CheckCircle } from "lucide-react"
 import { SchedulesSidebar } from "@/components/schedules-sidebar"
 import { useUser } from "@clerk/nextjs"
 import toast, { Toaster } from "react-hot-toast"
@@ -11,6 +11,8 @@ import { useRouter } from "next/navigation"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbPage } from "@/components/ui/breadcrumb"
+import { Badge } from "@/components/ui/badge"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 
 // Local storage keys
 const CONVERSATION_KEY = "app_conversation"
@@ -29,7 +31,6 @@ const DashboardPage = () => {
 
   // Load conversation from local storage on component mount
   useEffect(() => {
-    
     const loadConversation = () => {
       try {
         const savedTimestamp = localStorage.getItem(CONVERSATION_TIMESTAMP_KEY)
@@ -75,7 +76,7 @@ const DashboardPage = () => {
     const syncUser = async () => {
       if (isLoaded && isSignedIn && user) {
         try {
-          // Determine role based on email (you can modify this logic)
+          // Determine role based on email
           const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com",'akshayynazare@gmail.com']
           const userRole = teacherEmails.includes(user.primaryEmailAddress?.emailAddress) ? "teacher" : "student"
 
@@ -125,6 +126,19 @@ const DashboardPage = () => {
     syncUser()
   }, [isLoaded, isSignedIn, user])
 
+  const formatResponse = (text) => {
+    // Convert markdown bold to strong
+    let formatted = text.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    // Convert bullet points to list items
+    formatted = formatted.replace(/^-\s(.*$)/gm, '<li>$1</li>')
+    // Convert line breaks to paragraphs
+    formatted = formatted.split('\n').map(paragraph => {
+      if (paragraph.startsWith('<li>')) return paragraph
+      return `<p>${paragraph}</p>`
+    }).join('')
+    return formatted
+  }
+
   const handleSubmit = async (e) => {
     e.preventDefault()
     if (!userInput.trim() || isProcessing) return
@@ -166,17 +180,26 @@ const DashboardPage = () => {
         content: data.response,
         role: "system",
         timestamp: new Date().toISOString(),
-        sessions: data.matchingSessions || [],
+        matchingSessions: data.matchingSessions || [],
+        allSessions: data.allSessions || [],
         extractedData: data.extractedData || null,
+        sessionAction: data.sessionAction || null,
+        intent: data.intent || null,
       }
       setConversation((prev) => [...prev, systemMessage])
 
       setUserInput("")
 
-      // Update toast to success
-      toast.success("Found matching sessions for you!", {
-        id: loadingToast,
-      })
+      // Update toast based on action
+      if (data.sessionAction === 'joined_session') {
+        toast.success("Successfully joined the session!", { id: loadingToast })
+      } else if (data.sessionAction === 'provided_information') {
+        toast.success("Here's the information you requested", { id: loadingToast })
+      } else if (data.sessionAction === 'listed_all_sessions') {
+        toast.success("Showing all available sessions", { id: loadingToast })
+      } else {
+        toast.success("Message processed successfully", { id: loadingToast })
+      }
 
       // Scroll to bottom of conversation
       setTimeout(() => {
@@ -205,6 +228,134 @@ const DashboardPage = () => {
     localStorage.removeItem(CONVERSATION_KEY)
     localStorage.removeItem(CONVERSATION_TIMESTAMP_KEY)
     toast.success("Conversation cleared")
+  }
+
+  const handleJoinSession = async (sessionId) => {
+    try {
+      const response = await fetch("/api/schedule/join", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          userId: user.id,
+          sessionId: sessionId,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error("Failed to join session")
+      }
+
+      const data = await response.json()
+      toast.success("Successfully joined the session!")
+      
+      // Update conversation to reflect the join
+      setConversation(prev => [...prev, {
+        content: `You have successfully joined the session!`,
+        role: "system",
+        timestamp: new Date().toISOString(),
+        sessionAction: "joined_session"
+      }])
+    } catch (error) {
+      console.error("Error joining session:", error)
+      toast.error("Failed to join session")
+    }
+  }
+
+  const getStatusBadge = (status) => {
+    const statusConfig = {
+      pending: { color: "bg-yellow-500/10 text-yellow-700 border-yellow-500/20", text: "Pending" },
+      coordinated: { color: "bg-blue-500/10 text-blue-700 border-blue-500/20", text: "Coordinated" },
+      scheduled: { color: "bg-green-500/10 text-green-700 border-green-500/20", text: "Scheduled" },
+      completed: { color: "bg-gray-500/10 text-gray-700 border-gray-500/20", text: "Completed" },
+    }
+    
+    const config = statusConfig[status] || statusConfig.pending
+    return (
+      <Badge variant="outline" className={`${config.color} border`}>
+        {config.text}
+      </Badge>
+    )
+  }
+
+  const renderSessionCard = (session, index, isInquiry = false) => (
+    <Card key={index} className="border-l-4 border-l-primary/50 hover:shadow-md transition-shadow">
+      <CardHeader className="pb-3">
+        <div className="flex items-start justify-between">
+          <div className="flex-1">
+            <CardTitle className="text-lg">
+              <span className="font-bold">• {session.topic}</span>
+            </CardTitle>
+            <div className="mt-2 space-y-1">
+              <p className="text-sm flex items-center gap-1">
+                <User className="h-4 w-4" />
+                <span className="font-semibold">Teacher:</span> {session.teacherName}
+              </p>
+              <p className="text-sm flex items-center gap-1">
+                <Users className="h-4 w-4" />
+                <span className="font-semibold">Current Enrollment:</span> {session.currentStudents} students
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-2">
+            {getStatusBadge(session.status)}
+          </div>
+        </div>
+      </CardHeader>
+      {session.schedule && (
+        <CardContent className="pt-0">
+          <div className="flex items-center gap-4 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <Calendar className="h-4 w-4" />
+              {session.schedule.day}
+            </div>
+            <div className="flex items-center gap-1">
+              <Clock className="h-4 w-4" />
+              {session.schedule.startTime}-{session.schedule.endTime}
+            </div>
+          </div>
+          
+          {isInquiry && role === "student" && (
+            <div className="flex gap-2 mt-3">
+              <Button 
+                size="sm" 
+                onClick={() => handleJoinSession(session.id)}
+                className="flex items-center gap-2"
+              >
+                <CheckCircle className="h-4 w-4" />
+                Join Session
+              </Button>
+              <Button 
+                size="sm" 
+                variant="outline"
+                onClick={() => setUserInput(`Tell me more about ${session.topic} session`)}
+              >
+                Learn More
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  )
+
+  const renderSessionsList = (sessions, title, intent) => {
+    if (!sessions || sessions.length === 0) return null
+
+    const isInquiry = intent === 'inquiry' || intent === 'list_request'
+
+    return (
+      <div className="mt-4 space-y-3">
+        <h3 className="font-medium text-sm text-muted-foreground flex items-center gap-2">
+          <ArrowRight className="h-4 w-4" />
+          {title}
+        </h3>
+        <div className="space-y-3">
+          {sessions.map((session, index) => renderSessionCard(session, index, isInquiry))}
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -266,28 +417,39 @@ const DashboardPage = () => {
                     className={`p-4 rounded-lg ${
                       msg.role === "user"
                         ? "bg-primary/10 ml-auto max-w-[80%] sm:max-w-[70%] lg:max-w-[60%]"
-                        : "bg-muted/50 mr-auto max-w-[80%] sm:max-w-[70%] lg:max-w-[60%]"
+                        : "bg-muted/50 mr-auto max-w-[90%] sm:max-w-[85%] lg:max-w-[80%]"
                     }`}
                   >
-                    <p>{msg.content}</p>
-                    {msg.sessions && msg.sessions.length > 0 && (
-                      <div className="mt-2">
-                        <div className="grid gap-2">
-                          {msg.sessions.map((session, i) => (
-                            <div key={i} className="p-3 border rounded-lg bg-background">
-                              <h3 className="font-medium">{session.topic}</h3>
-                              <p className="text-sm text-muted-foreground">
-                                {session.teacherName} • {session.currentStudents} students
-                              </p>
-                              <p className="text-sm mt-1">
-                                {session.schedule.day}, {session.schedule.date} • {session.schedule.startTime}-
-                                {session.schedule.endTime}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
+                    {msg.role === "system" ? (
+                      <div 
+                        className="whitespace-pre-wrap"
+                        dangerouslySetInnerHTML={{ __html: formatResponse(msg.content) }}
+                      />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    )}
+                    
+                    {/* Display action indicator */}
+                    {msg.sessionAction && (
+                      <div className="mt-2 text-xs text-muted-foreground">
+                        {msg.sessionAction === 'joined_session' && '✅ Joined session successfully'}
+                        {msg.sessionAction === 'provided_information' && 'ℹ️ Information provided'}
+                        {msg.sessionAction === 'listed_all_sessions' && '📋 All sessions listed'}
+                        {msg.sessionAction === 'already_enrolled' && '👤 Already enrolled in session'}
+                        {msg.sessionAction === 'no_matching_sessions' && '❌ No matching sessions found'}
                       </div>
                     )}
+
+                    {/* Render matching sessions */}
+                    {msg.matchingSessions && msg.matchingSessions.length > 0 && 
+                      renderSessionsList(msg.matchingSessions, "Matching Sessions", msg.intent)}
+
+                    {/* Render all sessions for list requests */}
+                    {msg.allSessions && msg.allSessions.length > 0 && 
+                      renderSessionsList(msg.allSessions, "All Available Sessions", msg.intent)}
+
+                    {/* Show extracted data for debugging (optional) */}
+                    
                   </div>
                 ))}
               </div>
@@ -312,7 +474,7 @@ const DashboardPage = () => {
                         placeholder={
                           role === "teacher"
                             ? "E.g., 'I can teach React on Mondays 2-4pm'"
-                            : "E.g., 'I need help with Python next week'"
+                            : "E.g., 'I need help with Python', 'list all sessions', 'tell me about React session'"
                         }
                         value={userInput}
                         onChange={(e) => setUserInput(e.target.value)}
@@ -334,7 +496,7 @@ const DashboardPage = () => {
                   <p className="text-xs text-muted-foreground text-center mt-2">
                     {role === "teacher"
                       ? "Describe your expertise and availability"
-                      : "Describe what you want to learn and when"}
+                      : "Ask about sessions, join one, or list all available sessions"}
                   </p>
                 </div>
               </div>

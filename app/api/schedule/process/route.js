@@ -239,7 +239,6 @@ export async function POST(req) {
   }
 }
 
-// Teacher processing logic - ONLY teachers can create sessions
 // Fixed handleTeacherInput function with proper database operations
 async function handleTeacherInput(user, message, embedding, session, context, res) {
   try {
@@ -823,8 +822,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
         }
       }
     }
-    // Handle joining or timing updates
-    else if ((extractedData.topics && extractedData.topics.length > 0) || extractedData.isJoinRequest) {
+    // Handle joining or timing updates - ONLY if explicit join request
+    else if (extractedData.isJoinRequest) {
       // Find matching sessions
       matchingSessions = await Session.find({
         $and: [
@@ -845,7 +844,7 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       console.log(`Found ${matchingSessions.length} matching sessions for student ${user.name}`);
       
       // If student wants to join and there are matching sessions
-      if (extractedData.isJoinRequest && matchingSessions.length > 0) {
+      if (matchingSessions.length > 0) {
         const bestMatch = matchingSessions[0];
         
         console.log(`Checking enrollment for student ${user._id} in session ${bestMatch._id}`);
@@ -883,58 +882,59 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
           
           console.log(`Student ${user.name} already enrolled in session ${bestMatch._id}`);
         }
+      } else {
+        sessionAction = 'no_matching_sessions';
       }
-      // Handle case where no isJoinRequest but topics are provided
-      else if (extractedData.topics && extractedData.topics.length > 0 && !extractedData.isJoinRequest) {
-        extractedData.isJoinRequest = true;
-        
-        if (matchingSessions.length > 0) {
-          const bestMatch = matchingSessions[0];
-          const isAlreadyEnrolled = bestMatch.studentIds.some(student => 
-            student._id.toString() === user._id.toString()
-          );
-          
-          if (!isAlreadyEnrolled) {
-            bestMatch.studentIds.push(user._id);
-            
-            if (extractedData.availability && extractedData.availability.length > 0) {
-              if (!bestMatch.studentTimingPreferences) {
-                bestMatch.studentTimingPreferences = [];
-              }
-              
-              bestMatch.studentTimingPreferences.push({
-                studentId: user._id,
-                preferences: extractedData.availability,
-                updatedAt: new Date()
-              });
+    }
+    // Handle timing updates for existing session
+    else if (session && extractedData.isTimingUpdate && extractedData.availability) {
+      timingUpdateResult = await handleStudentTimingUpdate(
+        user, 
+        session, 
+        extractedData.availability, 
+        extractedData.isReplaceTimings
+      );
+      sessionAction = 'updated_timing';
+    }
+    // Handle information requests (topics mentioned but no join request)
+    else if (extractedData.topics && extractedData.topics.length > 0) {
+      // Find matching sessions for information only
+      matchingSessions = await Session.find({
+        $and: [
+          {
+            $or: [
+              { topic: { $in: extractedData.topics } },
+              { topic: { $regex: extractedData.topics.join('|'), $options: 'i' } }
+            ]
+          },
+          { status: { $in: ['pending', 'coordinated', 'scheduled'] } },
+          { teacherId: { $exists: true, $ne: null } }
+        ]
+      })
+      .populate('teacherId', 'name email')
+      .populate('studentIds', 'name email')
+      .limit(5);
 
-              timingUpdateResult = await recalculateOptimalTiming(bestMatch);
-            }
-            
-            await bestMatch.save();
-            session = bestMatch;
-            sessionAction = 'joined_session';
-          } else {
-            session = bestMatch;
-            sessionAction = 'already_enrolled';
-          }
-        } else {
-          sessionAction = 'no_matching_sessions';
-        }
-      }
-      // Handle timing updates for existing session
-      else if (session && extractedData.isTimingUpdate && extractedData.availability) {
-        timingUpdateResult = await handleStudentTimingUpdate(
-          user, 
-          session, 
-          extractedData.availability, 
-          extractedData.isReplaceTimings
-        );
-        sessionAction = 'updated_timing';
-      }
-      else {
-        sessionAction = 'awaiting_teacher';
-      }
+      sessionAction = 'information_request';
+    }
+    // Handle general session listing requests
+    else if (message.toLowerCase().includes('list all sessions') || 
+             message.toLowerCase().includes('show all sessions') ||
+             message.toLowerCase().includes('available sessions') ||
+             message.toLowerCase().includes('all sessions')) {
+      // Get all active sessions
+      matchingSessions = await Session.find({
+        status: { $in: ['pending', 'coordinated', 'scheduled'] },
+        teacherId: { $exists: true, $ne: null }
+      })
+      .populate('teacherId', 'name email')
+      .populate('studentIds', 'name email')
+      .limit(10);
+
+      sessionAction = 'list_all_sessions';
+    }
+    else {
+      sessionAction = 'awaiting_teacher';
     }
 
     // Store context
@@ -946,7 +946,9 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       embedding,
       metadata: {
         intent: extractedData.isLeaving ? 'leaving_session' : 
-                extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
+                extractedData.isTimingUpdate ? 'timing_update' : 
+                extractedData.isJoinRequest ? 'join_request' : 
+                sessionAction === 'list_all_sessions' ? 'list_all_sessions' : 'information_request',
         extractedData,
         sessionAction: sessionAction,
         matchingSessionsCount: matchingSessions.length,
@@ -961,7 +963,9 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       role: 'student',
       message: message.substring(0, 500),
       intent: extractedData.isLeaving ? 'leaving_session' : 
-              extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
+              extractedData.isTimingUpdate ? 'timing_update' : 
+              extractedData.isJoinRequest ? 'join_request' : 
+              sessionAction === 'list_all_sessions' ? 'list_all_sessions' : 'information_request',
       topics: extractedData.topics || [],
       session_action: sessionAction,
       timestamp: new Date().toISOString()
@@ -1003,7 +1007,9 @@ Generate a helpful response that:
 4. If timing was updated, explain the impact on scheduling
 5. If joined/updated session, confirms coordination with teacher
 6. If no matches, politely inform them briefly
-7. Maintains encouraging tone
+7. If information request, provide session details without enrollment
+8. If list_all_sessions,  list ONLY the actual sessions provided above - DO NOT create any dummy or example sessions
+9. Maintains encouraging tone
 
 Keep it concise and to the point. No placeholders.`;
 
@@ -1018,7 +1024,11 @@ Keep it concise and to the point. No placeholders.`;
       response: response.choices[0].message.content,
       session: session || null,
       sessionAction: sessionAction,
-      matchingSessions: matchingSessions.map(s => ({
+      intent: extractedData.isLeaving ? 'leaving_session' : 
+              extractedData.isTimingUpdate ? 'timing_update' : 
+              extractedData.isJoinRequest ? 'join_request' : 
+              sessionAction === 'list_all_sessions' ? 'list_request' : 'inquiry',
+      matchingSessions: sessionAction === 'list_all_sessions' ? [] : matchingSessions.map(s => ({
         id: s._id,
         topic: s.topic,
         teacherName: s.teacherId?.name,
@@ -1026,6 +1036,14 @@ Keep it concise and to the point. No placeholders.`;
         schedule: s.schedule,
         status: s.status
       })),
+      allSessions: sessionAction === 'list_all_sessions' ? matchingSessions.map(s => ({
+        id: s._id,
+        topic: s.topic,
+        teacherName: s.teacherId?.name,
+        currentStudents: s.studentIds.length,
+        schedule: s.schedule,
+        status: s.status
+      })) : [],
       extractedData,
       timingUpdateResult,
       removalResult,
@@ -1040,7 +1058,6 @@ Keep it concise and to the point. No placeholders.`;
     return res.status(500).json({ error: 'Error processing student input' });
   }
 }
-
 // Enhanced handleStudentLeaving function
 async function handleStudentLeaving(user, session) {
   try {
