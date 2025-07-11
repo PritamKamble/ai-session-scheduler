@@ -250,6 +250,8 @@ async function handleTeacherInput(user, message, embedding, session, context, re
 
     const prompt = `${contextString}Current teacher message: "${message}"
 
+IMPORTANT CONTEXT: Current session status: ${session ? 'EXISTS' : 'NO_SESSION'}
+
 Extract from this teacher message and return ONLY valid JSON:
 - expertise: array of topic strings
 - availability: array of objects with:
@@ -259,7 +261,7 @@ Extract from this teacher message and return ONLY valid JSON:
   - endTime: in 24-hour format (HH:MM)
   - timezone: if specified (e.g., "EST")
 - preferences: object with any session preferences
-- isUpdate: boolean (true if this is updating previous availability)
+- isUpdate: boolean (true if this is updating existing availability)
 - isCancel: boolean (true if canceling/deleting session)
 
 Current date: ${new Date().toISOString().split('T')[0]}
@@ -312,106 +314,118 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
 
     // Process availability dates
     if (extractedData.availability) {
-  extractedData.availability = extractedData.availability.map(slot => {
-    // Fix date handling
-    if (!slot.date && slot.day) {
-      const calculatedDate = calculateDateFromRelative(slot.day);
-      slot.date = calculatedDate;
-    } else if (typeof slot.date === 'string') {
-      // Convert string dates to Date objects
-      slot.date = new Date(slot.date + 'T00:00:00.000Z');
+      extractedData.availability = extractedData.availability.map(slot => {
+        // Fix date handling
+        if (!slot.date && slot.day) {
+          const calculatedDate = calculateDateFromRelative(slot.day);
+          slot.date = calculatedDate;
+        } else if (typeof slot.date === 'string') {
+          // Convert string dates to Date objects
+          slot.date = new Date(slot.date + 'T00:00:00.000Z');
+        }
+        
+        slot.startTime = convertTo24Hour(slot.startTime);
+        slot.endTime = convertTo24Hour(slot.endTime);
+        return slot;
+      }).filter(slot => slot.date && validateFutureDate(slot.date));
     }
-    
-    slot.startTime = convertTo24Hour(slot.startTime);
-    slot.endTime = convertTo24Hour(slot.endTime);
-    return slot;
-  }).filter(slot => slot.date && validateFutureDate(slot.date));
-}
 
     let sessionAction = 'none';
     
     // Handle session cancellation
-    if (extractedData.isCancel && session) {
-      await Session.findByIdAndDelete(session._id);
-      session = null;
-      sessionAction = 'deleted';
+    if (extractedData.isCancel) {
+      if (session) {
+        await Session.findByIdAndDelete(session._id);
+        session = null;
+        sessionAction = 'deleted';
+      } else {
+        // Try to find any pending session for this teacher
+        const existingSession = await Session.findOne({
+          teacherId: user._id,
+          status: { $in: ['pending', 'coordinated'] }
+        }).sort({ createdAt: -1 });
+        
+        if (existingSession) {
+          await Session.findByIdAndDelete(existingSession._id);
+          session = null;
+          sessionAction = 'deleted';
+        } else {
+          sessionAction = 'no_session_to_delete';
+        }
+      }
     }
     // Handle session creation/update
     else if (extractedData.availability && extractedData.availability.length > 0) {
+      
+      // First, try to find existing session if not provided
       if (!session) {
-  // Check for existing pending session to update
-  const existingSession = await Session.findOne({
-    teacherId: user._id,
-    status: 'pending'
-  }).sort({ createdAt: -1 });
-
-  if (existingSession && extractedData.isUpdate) {
-    session = existingSession;
-    sessionAction = 'updated_existing';
-  } else {
-    sessionAction = 'created_new';
-  }
-
-  if (!session) {
-    const firstSlot = extractedData.availability[0];
-    session = new Session({
-      topic: extractedData.expertise?.join(', ') || 'General Teaching',
-      teacherId: user._id,
-      schedule: {
-        date: firstSlot.date,
-        day: firstSlot.day,
-        startTime: firstSlot.startTime,
-        endTime: firstSlot.endTime,
-        timezone: firstSlot.timezone || 'UTC'
-      },
-      status: 'pending',
-      // FIX: Initialize teacherAvailability properly
-      teacherAvailability: extractedData.availability,
-      studentIds: [],
-      // FIX: Initialize studentTimingPreferences as empty array
-      studentTimingPreferences: []
-    });
-  }
-} else {
-  sessionAction = 'updated_current';
-}
-
-      session.teacherAvailability = extractedData.availability;
-
-// If there are student preferences, coordinate timing
-if (session.studentTimingPreferences && session.studentTimingPreferences.length > 0) {
-  // FIX: Extract all student preferences correctly
-  const allStudentPrefs = session.studentTimingPreferences.flatMap(
-    pref => pref.preferences || []
-  );
-  
-  const optimalTiming = findOptimalTiming(
-    extractedData.availability, 
-    allStudentPrefs
-  );
-  
-  if (optimalTiming) {
-    session.schedule = optimalTiming;
-    session.status = 'coordinated';
-  }
-} else {
-  // No student preferences, use first available slot
-  const firstSlot = extractedData.availability[0];
-  session.schedule = {
-    date: firstSlot.date,
-    day: firstSlot.day,
-    startTime: firstSlot.startTime,
-    endTime: firstSlot.endTime,
-    timezone: firstSlot.timezone || 'UTC'
-  };
-}
-
-      // Update topic if expertise is provided
-      if (extractedData.expertise && extractedData.expertise.length > 0) {
-        session.topic = extractedData.expertise.join(', ');
+        session = await Session.findOne({
+          teacherId: user._id,
+          status: { $in: ['pending', 'coordinated'] }
+        }).sort({ createdAt: -1 });
       }
 
-      await session.save();
+      // SIMPLIFIED LOGIC: If session exists, update it. If not, create new one.
+      if (session) {
+        // UPDATE EXISTING SESSION
+        session.teacherAvailability = extractedData.availability;
+        
+        // Update topic if expertise is provided
+        if (extractedData.expertise && extractedData.expertise.length > 0) {
+          session.topic = extractedData.expertise.join(', ');
+        }
+
+        // If there are student preferences, coordinate timing
+        if (session.studentTimingPreferences && session.studentTimingPreferences.length > 0) {
+          const allStudentPrefs = session.studentTimingPreferences.flatMap(
+            pref => pref.preferences || []
+          );
+          
+          const optimalTiming = findOptimalTiming(
+            extractedData.availability, 
+            allStudentPrefs
+          );
+          
+          if (optimalTiming) {
+            session.schedule = optimalTiming;
+            session.status = 'coordinated';
+          }
+        } else {
+          // No student preferences, use first available slot
+          const firstSlot = extractedData.availability[0];
+          session.schedule = {
+            date: firstSlot.date,
+            day: firstSlot.day,
+            startTime: firstSlot.startTime,
+            endTime: firstSlot.endTime,
+            timezone: firstSlot.timezone || 'UTC'
+          };
+        }
+
+        sessionAction = 'updated_existing';
+        await session.save();
+      } 
+      else {
+        // CREATE NEW SESSION
+        const firstSlot = extractedData.availability[0];
+        session = new Session({
+          topic: extractedData.expertise?.join(', ') || 'General Teaching',
+          teacherId: user._id,
+          schedule: {
+            date: firstSlot.date,
+            day: firstSlot.day,
+            startTime: firstSlot.startTime,
+            endTime: firstSlot.endTime,
+            timezone: firstSlot.timezone || 'UTC'
+          },
+          status: 'pending',
+          teacherAvailability: extractedData.availability,
+          studentIds: [],
+          studentTimingPreferences: []
+        });
+        sessionAction = 'created_new';
+        await session.save();
+      }
     }
 
     // Store context
@@ -422,7 +436,7 @@ if (session.studentTimingPreferences && session.studentTimingPreferences.length 
       message,
       embedding,
       metadata: {
-        intent: extractedData.isUpdate ? 'availability_update' : 'availability_initial',
+        intent: sessionAction === 'updated_existing' ? 'availability_update' : 'availability_initial',
         extractedData,
         hasValidAvailability: extractedData.availability?.length > 0,
         sessionAction: sessionAction
@@ -434,7 +448,7 @@ if (session.studentTimingPreferences && session.studentTimingPreferences.length 
       userId: user._id.toString(),
       role: 'teacher',
       message: message.substring(0, 500),
-      intent: extractedData.isUpdate ? 'availability_update' : 'availability_initial',
+      intent: sessionAction === 'updated_existing' ? 'availability_update' : 'availability_initial',
       expertise: extractedData.expertise || [],
       availability_count: extractedData.availability?.length || 0,
       next_available_date: extractedData.availability?.[0]?.date || '',
@@ -453,12 +467,22 @@ if (session.studentTimingPreferences && session.studentTimingPreferences.length 
       }])
     ]);
 
-    // Generate response
+    // Generate response based on session action
     const previousMessages = context.conversationHistory.map(c => 
       `${c.role === 'teacher' ? 'Teacher' : 'Student'}: ${c.message}`
     ).join('\n');
 
-    const responsePrompt = `You are responding to teacher ${user.name} in an ongoing conversation.
+    let responsePrompt;
+    
+    switch (sessionAction) {
+      case 'deleted':
+        responsePrompt = `You are responding to teacher ${user.name}. They have successfully cancelled/deleted their session. Acknowledge the cancellation and ask if they need anything else.`;
+        break;
+      case 'no_session_to_delete':
+        responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session but no active session was found. Politely inform them there's no active session to cancel.`;
+        break;
+      default:
+        responsePrompt = `You are responding to teacher ${user.name} in an ongoing conversation.
 
 Previous conversation:
 ${previousMessages}
@@ -469,12 +493,13 @@ Current students enrolled: ${session?.studentIds?.length || 0}
 
 Generate a response that:
 1. Acknowledges their message contextually
-2. Confirms the session action taken
+2. Confirms the session action taken (${sessionAction === 'updated_existing' ? 'availability updated' : sessionAction === 'created_new' ? 'new session created' : 'processed'})
 3. If students are enrolled, mentions coordination with student preferences
 4. Provides clear next steps
 5. Maintains professional but friendly tone
 
 Keep response concise and helpful.`;
+    }
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -522,6 +547,7 @@ Extract from this student message and return ONLY valid JSON:
 - isJoinRequest: boolean (true if wanting to join a session)
 - isTimingUpdate: boolean (true if updating timing preferences)
 - isLeaving: boolean (true if wanting to leave session)
+- isReplaceTimings: boolean (true if replacing all previous timings, false if adding to existing)
 
 Current date: ${new Date().toISOString().split('T')[0]}
 
@@ -543,7 +569,8 @@ Example format:
   },
   "isJoinRequest": true,
   "isTimingUpdate": false,
-  "isLeaving": false
+  "isLeaving": false,
+  "isReplaceTimings": false
 }
 
 RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
@@ -589,20 +616,13 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
 
     let sessionAction = 'none';
     let matchingSessions = [];
+    let timingUpdateResult = null;
 
     // Handle leaving session
     if (extractedData.isLeaving && session) {
-      session.studentIds = session.studentIds.filter(id => !id.equals(user._id));
-      if (session.studentTimingPreferences) {
-        session.studentTimingPreferences = session.studentTimingPreferences.filter(
-          pref => !pref.studentId.equals(user._id)
-        );
-      }
-      
-      // FIXED: Recalculate optimal timing for remaining students
-      await recalculateOptimalTiming(session);
-      await session.save();
-      sessionAction = 'left_session';
+      const leaveResult = await handleStudentLeaving(user, session);
+      sessionAction = leaveResult.action;
+      session = leaveResult.session;
     }
     // Handle joining or timing updates
     else if ((extractedData.topics && extractedData.topics.length > 0) || extractedData.isJoinRequest) {
@@ -630,13 +650,10 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
         const bestMatch = matchingSessions[0];
         
         console.log(`Checking enrollment for student ${user._id} in session ${bestMatch._id}`);
-        console.log(`Current students: ${bestMatch.studentIds.map(s => s._id).join(', ')}`);
         
         const isAlreadyEnrolled = bestMatch.studentIds.some(student => 
           student._id.toString() === user._id.toString()
         );
-        
-        console.log(`Student already enrolled: ${isAlreadyEnrolled}`);
         
         if (!isAlreadyEnrolled) {
           bestMatch.studentIds.push(user._id);
@@ -653,8 +670,7 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
               updatedAt: new Date()
             });
 
-            // FIXED: Recalculate optimal timing considering ALL students
-            await recalculateOptimalTiming(bestMatch);
+            timingUpdateResult = await recalculateOptimalTiming(bestMatch);
           }
           
           await bestMatch.save();
@@ -693,8 +709,7 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
                 updatedAt: new Date()
               });
 
-              // FIXED: Recalculate optimal timing considering ALL students
-              await recalculateOptimalTiming(bestMatch);
+              timingUpdateResult = await recalculateOptimalTiming(bestMatch);
             }
             
             await bestMatch.save();
@@ -710,26 +725,12 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       }
       // Handle timing updates for existing session
       else if (session && extractedData.isTimingUpdate && extractedData.availability) {
-        if (!session.studentTimingPreferences) {
-          session.studentTimingPreferences = [];
-        }
-        
-        // Remove existing preferences for this student
-        session.studentTimingPreferences = session.studentTimingPreferences.filter(
-          pref => !pref.studentId.equals(user._id)
+        timingUpdateResult = await handleStudentTimingUpdate(
+          user, 
+          session, 
+          extractedData.availability, 
+          extractedData.isReplaceTimings
         );
-        
-        // Add new preferences
-        session.studentTimingPreferences.push({
-          studentId: user._id,
-          preferences: extractedData.availability,
-          updatedAt: new Date()
-        });
-
-        // FIXED: Recalculate optimal timing considering ALL students
-        await recalculateOptimalTiming(session);
-        
-        await session.save();
         sessionAction = 'updated_timing';
       }
       else {
@@ -748,7 +749,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
         intent: extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
         extractedData,
         sessionAction: sessionAction,
-        matchingSessionsCount: matchingSessions.length
+        matchingSessionsCount: matchingSessions.length,
+        timingUpdateResult: timingUpdateResult
       }
     });
 
@@ -787,18 +789,19 @@ ${previousMessages}
 Current message: "${message}"
 Session action taken: ${sessionAction}
 Matching sessions found: ${matchingSessions.length}
+Timing update result: ${timingUpdateResult ? JSON.stringify(timingUpdateResult) : 'None'}
 
 ${session ? `Current session: ${session.topic} with ${session.studentIds.length} students` : 'No current session'}
 
 Generate a helpful response that:
 1. Acknowledges their message contextually
 2. Explains the action taken
-3. If joined/updated session, confirms coordination with teacher
-4. If no matches, explains options available
-5. Provides clear next steps
-6. Maintains encouraging tone
+3. If timing was updated, explain the impact on scheduling
+4. If joined/updated session, confirms coordination with teacher
+5. If no matches, politely just inform them no lengthy text
+7. Maintains encouraging tone
 
-Keep response helpful and conversational.`;
+Keep onpoint and concise`;
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -820,6 +823,7 @@ Keep response helpful and conversational.`;
         status: s.status
       })),
       extractedData,
+      timingUpdateResult,
       contextUsed: {
         previousMessages: context.conversationHistory.length,
         contextMatches: context.contextMatches.length
@@ -832,19 +836,203 @@ Keep response helpful and conversational.`;
   }
 }
 
-// FIXED: New helper function to recalculate optimal timing for all students
+// NEW: Handle student leaving with proper cleanup
+async function handleStudentLeaving(user, session) {
+  console.log(`Student ${user.name} leaving session ${session._id}`);
+  
+  // Store original schedule for comparison
+  const originalSchedule = session.schedule ? { ...session.schedule } : null;
+  
+  // Remove student from session
+  session.studentIds = session.studentIds.filter(id => !id.equals(user._id));
+  
+  // Remove student's timing preferences
+  if (session.studentTimingPreferences) {
+    session.studentTimingPreferences = session.studentTimingPreferences.filter(
+      pref => !pref.studentId.equals(user._id)
+    );
+  }
+  
+  let action = 'left_session';
+  
+  // Check if session should be deleted or updated
+  if (session.studentIds.length === 0) {
+    // No students left, delete the session
+    await Session.deleteOne({ _id: session._id });
+    action = 'session_deleted';
+    session = null;
+    console.log(`Session ${session._id} deleted - no students remaining`);
+  } else {
+    // Recalculate timing for remaining students
+    const timingResult = await recalculateOptimalTiming(session);
+    await session.save();
+    
+    // Check if schedule changed significantly
+    if (originalSchedule && session.schedule) {
+      const scheduleChanged = (
+        originalSchedule.startTime !== session.schedule.startTime ||
+        originalSchedule.endTime !== session.schedule.endTime ||
+        originalSchedule.date !== session.schedule.date
+      );
+      
+      if (scheduleChanged) {
+        action = 'left_session_schedule_changed';
+        console.log(`Session schedule changed after student left:`, {
+          original: originalSchedule,
+          new: session.schedule
+        });
+      }
+    }
+    
+    console.log(`Session ${session._id} updated after student left`);
+  }
+  
+  return { action, session };
+}
+
+// NEW: Handle timing updates with proper conflict resolution
+async function handleStudentTimingUpdate(user, session, newAvailability, isReplaceTimings) {
+  console.log(`Student ${user.name} updating timing preferences, replace: ${isReplaceTimings}`);
+  
+  if (!session.studentTimingPreferences) {
+    session.studentTimingPreferences = [];
+  }
+  
+  // Store original schedule for comparison
+  const originalSchedule = session.schedule ? { ...session.schedule } : null;
+  
+  // Find existing preferences for this student
+  const existingPrefIndex = session.studentTimingPreferences.findIndex(
+    pref => pref.studentId.equals(user._id)
+  );
+  
+  let updateResult = {
+    action: 'timing_updated',
+    scheduleChanged: false,
+    previousSchedule: originalSchedule,
+    newSchedule: null,
+    conflictResolution: null
+  };
+  
+  if (existingPrefIndex !== -1) {
+    if (isReplaceTimings) {
+      // Replace all existing preferences
+      session.studentTimingPreferences[existingPrefIndex] = {
+        studentId: user._id,
+        preferences: newAvailability,
+        updatedAt: new Date()
+      };
+      updateResult.action = 'timing_replaced';
+      console.log(`Replaced all timing preferences for student ${user.name}`);
+    } else {
+      // Add to existing preferences (merge)
+      const existingPrefs = session.studentTimingPreferences[existingPrefIndex].preferences;
+      const mergedPrefs = mergeTimingPreferences(existingPrefs, newAvailability);
+      
+      session.studentTimingPreferences[existingPrefIndex] = {
+        studentId: user._id,
+        preferences: mergedPrefs,
+        updatedAt: new Date()
+      };
+      updateResult.action = 'timing_merged';
+      console.log(`Merged timing preferences for student ${user.name}`);
+    }
+  } else {
+    // Add new preferences
+    session.studentTimingPreferences.push({
+      studentId: user._id,
+      preferences: newAvailability,
+      updatedAt: new Date()
+    });
+    updateResult.action = 'timing_added';
+    console.log(`Added new timing preferences for student ${user.name}`);
+  }
+  
+  // Recalculate optimal timing
+  const timingResult = await recalculateOptimalTiming(session);
+  updateResult.newSchedule = session.schedule;
+  
+  // Check if schedule changed
+  if (originalSchedule && session.schedule) {
+    const scheduleChanged = (
+      originalSchedule.startTime !== session.schedule.startTime ||
+      originalSchedule.endTime !== session.schedule.endTime ||
+      originalSchedule.date !== session.schedule.date
+    );
+    
+    updateResult.scheduleChanged = scheduleChanged;
+    
+    if (scheduleChanged) {
+      console.log(`Schedule changed after timing update:`, {
+        original: originalSchedule,
+        new: session.schedule
+      });
+    }
+  }
+  
+  // Check for conflicts
+  updateResult.conflictResolution = timingResult.conflictResolution;
+  
+  await session.save();
+  
+  return updateResult;
+}
+
+// NEW: Merge timing preferences intelligently
+function mergeTimingPreferences(existingPrefs, newPrefs) {
+  const merged = [...existingPrefs];
+  
+  newPrefs.forEach(newPref => {
+    const newDate = newPref.date instanceof Date 
+      ? newPref.date.toISOString().split('T')[0] 
+      : newPref.date;
+    
+    // Check if there's an existing preference for the same date
+    const existingIndex = merged.findIndex(existing => {
+      const existingDate = existing.date instanceof Date 
+        ? existing.date.toISOString().split('T')[0] 
+        : existing.date;
+      return existingDate === newDate;
+    });
+    
+    if (existingIndex !== -1) {
+      // Replace existing preference for this date
+      merged[existingIndex] = newPref;
+    } else {
+      // Add new preference
+      merged.push(newPref);
+    }
+  });
+  
+  return merged;
+}
+
+// IMPROVED: Enhanced timing calculation with better conflict resolution
 async function recalculateOptimalTiming(session) {
+  console.log(`Recalculating timing for session ${session._id}`);
+  
+  let result = {
+    success: false,
+    conflictResolution: null,
+    studentsAccommodated: 0,
+    totalStudents: session.studentIds.length
+  };
+  
   if (!session.teacherAvailability || session.teacherAvailability.length === 0) {
     console.log('No teacher availability found for session', session._id);
-    return;
+    session.status = 'pending';
+    result.conflictResolution = 'no_teacher_availability';
+    return result;
   }
 
   if (!session.studentTimingPreferences || session.studentTimingPreferences.length === 0) {
     // If no student preferences, use first teacher slot
     session.schedule = session.teacherAvailability[0];
     session.status = 'scheduled';
+    result.success = true;
+    result.conflictResolution = 'using_teacher_availability_only';
     console.log('No student preferences, using first teacher slot');
-    return;
+    return result;
   }
 
   // Collect all student preferences
@@ -852,9 +1040,9 @@ async function recalculateOptimalTiming(session) {
     pref => pref.preferences
   );
 
-  console.log(`Recalculating timing for ${session.studentTimingPreferences.length} students with ${allStudentPreferences.length} total preferences`);
+  console.log(`Processing ${session.studentTimingPreferences.length} students with ${allStudentPreferences.length} total preferences`);
 
-  // Find optimal timing that works for ALL students
+  // Try to find optimal timing for ALL students
   const optimalTiming = findOptimalTimingForAllStudents(
     session.teacherAvailability,
     allStudentPreferences
@@ -863,26 +1051,35 @@ async function recalculateOptimalTiming(session) {
   if (optimalTiming) {
     session.schedule = optimalTiming;
     session.status = 'scheduled';
+    result.success = true;
+    result.studentsAccommodated = session.studentIds.length;
+    result.conflictResolution = 'perfect_match';
     console.log('Found optimal timing for all students:', optimalTiming);
   } else {
-    // If no perfect match, find best compromise
-    const compromiseTiming = findBestCompromiseTiming(
+    // Find best compromise
+    const compromiseResult = findBestCompromiseTiming(
       session.teacherAvailability,
-      allStudentPreferences
+      allStudentPreferences,
+      session.studentIds.length
     );
     
-    if (compromiseTiming) {
-      session.schedule = compromiseTiming;
-      session.status = 'coordinated'; // Status indicates compromise needed
-      console.log('Using compromise timing:', compromiseTiming);
+    if (compromiseResult.timing) {
+      session.schedule = compromiseResult.timing;
+      session.status = compromiseResult.studentsAccommodated === session.studentIds.length ? 'scheduled' : 'coordinated';
+      result.success = true;
+      result.studentsAccommodated = compromiseResult.studentsAccommodated;
+      result.conflictResolution = 'compromise_solution';
+      console.log(`Using compromise timing accommodating ${compromiseResult.studentsAccommodated}/${session.studentIds.length} students`);
     } else {
-      session.status = 'pending'; // No suitable timing found
+      session.status = 'pending';
+      result.conflictResolution = 'no_suitable_timing';
       console.log('No suitable timing found, session remains pending');
     }
   }
+  
+  return result;
 }
 
-// FIXED: Enhanced function to find timing that works for ALL students
 function findOptimalTimingForAllStudents(teacherAvailability, allStudentPreferences) {
   if (!teacherAvailability || teacherAvailability.length === 0) {
     return null;
@@ -931,10 +1128,9 @@ function findOptimalTimingForAllStudents(teacherAvailability, allStudentPreferen
     }
   }
 
-  return null; // No timing that works for ALL students
+  return null;
 }
 
-// Helper function to find time overlap for all students on a specific date
 function findTimeOverlapForAllStudents(teacherSlot, studentPrefsForDate) {
   let overlapStart = teacherSlot.startTime;
   let overlapEnd = teacherSlot.endTime;
@@ -958,7 +1154,7 @@ function findTimeOverlapForAllStudents(teacherSlot, studentPrefsForDate) {
   const startMinutes = parseInt(overlapStart.split(':')[0]) * 60 + parseInt(overlapStart.split(':')[1]);
   const endMinutes = parseInt(overlapEnd.split(':')[0]) * 60 + parseInt(overlapEnd.split(':')[1]);
   
-  if (endMinutes - startMinutes >= 30) { // At least 30 minutes
+  if (endMinutes - startMinutes >= 30) {
     return {
       startTime: overlapStart,
       endTime: overlapEnd
@@ -968,61 +1164,100 @@ function findTimeOverlapForAllStudents(teacherSlot, studentPrefsForDate) {
   return null;
 }
 
-// FIXED: Function to find best compromise when no perfect match exists
-function findBestCompromiseTiming(teacherAvailability, allStudentPreferences) {
+// IMPROVED: Better compromise timing with detailed metrics
+function findBestCompromiseTiming(teacherAvailability, allStudentPreferences, totalStudents) {
   if (!teacherAvailability || teacherAvailability.length === 0) {
-    return null;
+    return { timing: null, studentsAccommodated: 0 };
   }
 
   let bestMatch = null;
   let maxCompatibleStudents = 0;
+  let bestCompromiseWindow = null;
 
-  // Try each teacher slot and see how many students it can accommodate
+  // Try each teacher slot
   for (const teacherSlot of teacherAvailability) {
     const teacherDate = teacherSlot.date instanceof Date
       ? teacherSlot.date.toISOString().split('T')[0]
       : teacherSlot.date;
 
-    let compatibleStudents = 0;
-    let earliestStart = teacherSlot.startTime;
-    let latestEnd = teacherSlot.endTime;
+    // Find all student preferences for this date
+    const relevantStudentPrefs = allStudentPreferences.filter(pref => {
+      const studentDate = pref.date instanceof Date
+        ? pref.date.toISOString().split('T')[0]
+        : pref.date;
+      return teacherDate === studentDate;
+    });
 
-    // Count how many students can work with this teacher slot
-    for (const studentPref of allStudentPreferences) {
-      const studentDate = studentPref.date instanceof Date
-        ? studentPref.date.toISOString().split('T')[0]
-        : studentPref.date;
-
-      if (teacherDate === studentDate) {
-        // Check for any time overlap
-        if (teacherSlot.startTime < studentPref.endTime && 
-            teacherSlot.endTime > studentPref.startTime) {
-          compatibleStudents++;
-          
-          // Find the best compromise time window
-          if (studentPref.startTime > earliestStart) {
-            earliestStart = studentPref.startTime;
-          }
-          if (studentPref.endTime < latestEnd) {
-            latestEnd = studentPref.endTime;
-          }
-        }
-      }
+    if (relevantStudentPrefs.length === 0) {
+      continue;
     }
 
-    // If this slot works for more students, use it
-    if (compatibleStudents > maxCompatibleStudents) {
-      maxCompatibleStudents = compatibleStudents;
+    // Find the best compromise window for this teacher slot
+    const compromiseResult = findBestCompromiseWindow(teacherSlot, relevantStudentPrefs);
+    
+    if (compromiseResult.studentsAccommodated > maxCompatibleStudents) {
+      maxCompatibleStudents = compromiseResult.studentsAccommodated;
       bestMatch = {
         date: teacherSlot.date,
         day: teacherSlot.day,
-        startTime: earliestStart,
-        endTime: latestEnd,
-        timezone: teacherSlot.timezone || 'UTC',
-        compatibleStudents: compatibleStudents
+        startTime: compromiseResult.startTime,
+        endTime: compromiseResult.endTime,
+        timezone: teacherSlot.timezone || 'UTC'
       };
     }
   }
 
-  return bestMatch;
+  return {
+    timing: bestMatch,
+    studentsAccommodated: maxCompatibleStudents
+  };
+}
+
+// NEW: Find best compromise window within a teacher slot
+function findBestCompromiseWindow(teacherSlot, studentPrefs) {
+  let bestWindow = null;
+  let maxStudents = 0;
+
+  // Try different time windows within the teacher slot
+  const teacherStartMinutes = timeToMinutes(teacherSlot.startTime);
+  const teacherEndMinutes = timeToMinutes(teacherSlot.endTime);
+
+  // Generate possible time windows (30-minute intervals)
+  for (let startMinutes = teacherStartMinutes; startMinutes < teacherEndMinutes - 30; startMinutes += 15) {
+    for (let endMinutes = startMinutes + 30; endMinutes <= teacherEndMinutes; endMinutes += 15) {
+      const windowStart = minutesToTime(startMinutes);
+      const windowEnd = minutesToTime(endMinutes);
+
+      // Count how many students can work in this window
+      let compatibleStudents = 0;
+      for (const studentPref of studentPrefs) {
+        if (studentPref.startTime <= windowStart && studentPref.endTime >= windowEnd) {
+          compatibleStudents++;
+        }
+      }
+
+      if (compatibleStudents > maxStudents) {
+        maxStudents = compatibleStudents;
+        bestWindow = {
+          startTime: windowStart,
+          endTime: windowEnd,
+          studentsAccommodated: compatibleStudents
+        };
+      }
+    }
+  }
+
+  return bestWindow || { startTime: teacherSlot.startTime, endTime: teacherSlot.endTime, studentsAccommodated: 0 };
+}
+
+// Helper functions
+function timeToMinutes(timeString) {
+  const [hours, minutes] = timeString.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+function minutesToTime(minutes) {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
 }
