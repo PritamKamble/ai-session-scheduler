@@ -240,6 +240,7 @@ export async function POST(req) {
 }
 
 // Teacher processing logic - ONLY teachers can create sessions
+// Fixed handleTeacherInput function with proper database operations
 async function handleTeacherInput(user, message, embedding, session, context, res) {
   try {
     const contextString = context.conversationHistory.length > 0 
@@ -380,31 +381,32 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
     }
 
     let sessionAction = 'none';
+    let currentSession = session; // Use a local variable to track session changes
     
     // Handle session cancellation with improved logic
     if (extractedData.isCancel) {
       let sessionToDelete = null;
       
       // If there's a current session in context
-      if (session) {
+      if (currentSession) {
         // Check if the cancellation is for the current session's topic
         if (extractedData.cancelSubject) {
-          if (doesCancellationMatchSession(extractedData.cancelSubject, session)) {
-            sessionToDelete = session;
+          if (doesCancellationMatchSession(extractedData.cancelSubject, currentSession)) {
+            sessionToDelete = currentSession;
           } else {
             // They're trying to cancel a different topic than current session
             sessionAction = 'cancellation_topic_mismatch';
           }
         } else {
           // No specific subject mentioned, assume they mean current session
-          sessionToDelete = session;
+          sessionToDelete = currentSession;
         }
       } else {
         // No session in context, try to find specific session by topic
         if (extractedData.cancelSubject) {
           const existingSession = await Session.findOne({
             teacherId: user._id,
-            status: { $in: ['pending', 'coordinated'] },
+            status: { $in: ['pending', 'coordinated', 'scheduled'] }, // Added 'scheduled'
             topic: { $regex: new RegExp(extractedData.cancelSubject, 'i') }
           }).sort({ createdAt: -1 });
           
@@ -417,7 +419,7 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
           // No specific subject and no session in context, find any session
           const existingSession = await Session.findOne({
             teacherId: user._id,
-            status: { $in: ['pending', 'coordinated'] }
+            status: { $in: ['pending', 'coordinated', 'scheduled'] } // Added 'scheduled'
           }).sort({ createdAt: -1 });
           
           if (existingSession) {
@@ -430,103 +432,150 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       
       // Actually delete the session if found
       if (sessionToDelete) {
-        await Session.findByIdAndDelete(sessionToDelete._id);
-        session = null;
-        sessionAction = 'deleted';
+        try {
+          await Session.findByIdAndDelete(sessionToDelete._id);
+          currentSession = null;
+          sessionAction = 'deleted';
+          console.log('Session deleted:', sessionToDelete._id);
+        } catch (deleteError) {
+          console.error('Error deleting session:', deleteError);
+          sessionAction = 'delete_failed';
+          return res.status(500).json({ error: 'Failed to delete session' });
+        }
       }
     }
     // Handle session creation/update
     else if (extractedData.availability && extractedData.availability.length > 0) {
       
       // IMPROVED LOGIC: Default to creating new sessions unless explicitly updating
-      let shouldCreateNewSession = false;
+      let shouldCreateNewSession = true;
       
-      // Default behavior: if teacher provides new availability, create new session
-      if (extractedData.availability && extractedData.availability.length > 0) {
-        shouldCreateNewSession = true;
-        
-        // Only update existing session if explicitly marked as update
-        if (extractedData.isUpdate && session) {
+      // Only update existing session if explicitly marked as update
+      if (extractedData.isUpdate) {
+        if (currentSession) {
           shouldCreateNewSession = false;
-        }
-        // Or if explicitly marked as update but no session in context, find existing
-        else if (extractedData.isUpdate && !session) {
-          session = await Session.findOne({
-            teacherId: user._id,
-            status: { $in: ['pending', 'coordinated'] }
-          }).sort({ createdAt: -1 });
-          
-          if (session) {
-            shouldCreateNewSession = false;
+        } else {
+          // Try to find existing session for update
+          try {
+            const existingSession = await Session.findOne({
+              teacherId: user._id,
+              status: { $in: ['pending', 'coordinated', 'scheduled'] }
+            }).sort({ createdAt: -1 });
+            
+            if (existingSession) {
+              currentSession = existingSession;
+              shouldCreateNewSession = false;
+              console.log('Found existing session for update:', existingSession._id);
+            } else {
+              console.log('No existing session found for update, will create new');
+            }
+          } catch (findError) {
+            console.error('Error finding session for update:', findError);
           }
         }
       }
 
       if (shouldCreateNewSession) {
         // CREATE NEW SESSION
-        const firstSlot = extractedData.availability[0];
-        session = new Session({
-          topic: extractedData.expertise?.join(', ') || 'General Teaching',
-          teacherId: user._id,
-          schedule: {
-            date: firstSlot.date,
-            day: firstSlot.day,
-            startTime: firstSlot.startTime,
-            endTime: firstSlot.endTime,
-            timezone: firstSlot.timezone || 'UTC'
-          },
-          status: 'pending',
-          teacherAvailability: extractedData.availability,
-          studentIds: [],
-          studentTimingPreferences: []
-        });
-        sessionAction = 'created_new';
-        await session.save();
-      } 
-      else if (session) {
-        // UPDATE EXISTING SESSION
-        session.teacherAvailability = extractedData.availability;
-        
-        // Update topic if expertise is provided
-        if (extractedData.expertise && extractedData.expertise.length > 0) {
-          session.topic = extractedData.expertise.join(', ');
-        }
-
-        // If there are student preferences, coordinate timing
-        if (session.studentTimingPreferences && session.studentTimingPreferences.length > 0) {
-          const allStudentPrefs = session.studentTimingPreferences.flatMap(
-            pref => pref.preferences || []
-          );
-          
-          const optimalTiming = findOptimalTiming(
-            extractedData.availability, 
-            allStudentPrefs
-          );
-          
-          if (optimalTiming) {
-            session.schedule = optimalTiming;
-            session.status = 'coordinated';
-          }
-        } else {
-          // No student preferences, use first available slot
+        try {
           const firstSlot = extractedData.availability[0];
-          session.schedule = {
-            date: firstSlot.date,
-            day: firstSlot.day,
-            startTime: firstSlot.startTime,
-            endTime: firstSlot.endTime,
-            timezone: firstSlot.timezone || 'UTC'
-          };
+          const newSession = new Session({
+            topic: extractedData.expertise?.join(', ') || 'General Teaching',
+            teacherId: user._id,
+            schedule: {
+              date: firstSlot.date,
+              day: firstSlot.day,
+              startTime: firstSlot.startTime,
+              endTime: firstSlot.endTime,
+              timezone: firstSlot.timezone || 'UTC'
+            },
+            status: 'pending',
+            teacherAvailability: extractedData.availability,
+            studentIds: [],
+            studentTimingPreferences: []
+          });
+          
+          const savedSession = await newSession.save();
+          currentSession = savedSession;
+          sessionAction = 'created_new';
+          console.log('New session created:', savedSession._id);
+        } catch (createError) {
+          console.error('Error creating new session:', createError);
+          sessionAction = 'create_failed';
+          return res.status(500).json({ error: 'Failed to create new session' });
         }
+      } 
+      else if (currentSession) {
+        // UPDATE EXISTING SESSION
+        try {
+          // CRITICAL FIX: Always fetch the latest session from DB before updating
+          const sessionFromDB = await Session.findById(currentSession._id);
+          if (!sessionFromDB) {
+            console.error('Session not found in database for update');
+            sessionAction = 'session_not_found';
+            return res.status(404).json({ error: 'Session not found for update' });
+          }
 
-        sessionAction = 'updated_existing';
-        await session.save();
+          console.log('Updating existing session:', sessionFromDB._id);
+          console.log('Previous availability:', sessionFromDB.teacherAvailability);
+          console.log('New availability:', extractedData.availability);
+
+          // Update availability
+          sessionFromDB.teacherAvailability = extractedData.availability;
+          
+          // Update topic if expertise is provided
+          if (extractedData.expertise && extractedData.expertise.length > 0) {
+            sessionFromDB.topic = extractedData.expertise.join(', ');
+          }
+
+          // If there are student preferences, coordinate timing
+          if (sessionFromDB.studentTimingPreferences && sessionFromDB.studentTimingPreferences.length > 0) {
+            const allStudentPrefs = sessionFromDB.studentTimingPreferences.flatMap(
+              pref => pref.preferences || []
+            );
+            
+            const optimalTiming = findOptimalTiming(
+              extractedData.availability, 
+              allStudentPrefs
+            );
+            
+            if (optimalTiming) {
+              sessionFromDB.schedule = optimalTiming;
+              sessionFromDB.status = 'coordinated';
+              console.log('Updated schedule with optimal timing:', optimalTiming);
+            }
+          } else {
+            // No student preferences, use first available slot
+            const firstSlot = extractedData.availability[0];
+            sessionFromDB.schedule = {
+              date: firstSlot.date,
+              day: firstSlot.day,
+              startTime: firstSlot.startTime,
+              endTime: firstSlot.endTime,
+              timezone: firstSlot.timezone || 'UTC'
+            };
+            console.log('Updated schedule with first available slot:', sessionFromDB.schedule);
+          }
+
+          // CRITICAL FIX: Ensure we save the session properly
+          const savedSession = await sessionFromDB.save();
+          currentSession = savedSession;
+          sessionAction = 'updated_existing';
+          console.log('Session updated successfully:', savedSession._id);
+          console.log('Updated availability:', savedSession.teacherAvailability);
+          
+        } catch (updateError) {
+          console.error('Error updating session:', updateError);
+          console.error('Update error details:', updateError.message);
+          sessionAction = 'update_failed';
+          return res.status(500).json({ error: 'Failed to update session: ' + updateError.message });
+        }
       }
     }
 
     // Store context
     const newContext = new Context({
-      sessionId: session?._id,
+      sessionId: currentSession?._id,
       userId: user._id,
       role: 'teacher',
       message,
@@ -540,7 +589,7 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
     });
 
     const pineconeMetadata = preparePineconeMetadata({
-      sessionId: session?._id?.toString() || '',
+      sessionId: currentSession?._id?.toString() || '',
       userId: user._id.toString(),
       role: 'teacher',
       message: message.substring(0, 500),
@@ -554,14 +603,21 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
 
     const vectorId = `ctx-teacher-${user._id}-${Date.now()}`;
 
-    await Promise.all([
-      newContext.save(),
-      index.namespace('conversations').upsert([{
-        id: vectorId,
-        values: embedding,
-        metadata: pineconeMetadata
-      }])
-    ]);
+    // CRITICAL FIX: Ensure context is saved properly
+    try {
+      await Promise.all([
+        newContext.save(),
+        index.namespace('conversations').upsert([{
+          id: vectorId,
+          values: embedding,
+          metadata: pineconeMetadata
+        }])
+      ]);
+      console.log('Context saved successfully');
+    } catch (contextError) {
+      console.error('Error saving context:', contextError);
+      // Don't fail the entire request for context save issues
+    }
 
     // Generate response based on session action
     const previousMessages = context.conversationHistory.map(c => 
@@ -578,10 +634,19 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
         responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session but no active session was found. Politely inform them there's no active session to cancel.`;
         break;
       case 'cancellation_topic_mismatch':
-        responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session for "${extractedData.cancelSubject}" but their current active session is for "${session.topic}". Let them know their current ${session.topic} session is still active, and ask if they want to cancel that instead or if they meant something else.`;
+        responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session for "${extractedData.cancelSubject}" but their current active session is for "${currentSession?.topic}". Let them know their current ${currentSession?.topic} session is still active, and ask if they want to cancel that instead or if they meant something else.`;
         break;
       case 'no_matching_session_to_delete':
         responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session for "${extractedData.cancelSubject}" but no matching session was found for that topic. Politely inform them that no matching session was found to cancel.`;
+        break;
+      case 'session_not_found':
+        responsePrompt = `You are responding to teacher ${user.name}. They tried to update a session but the session could not be found in the database. Politely inform them that the session was not found and suggest creating a new one.`;
+        break;
+      case 'update_failed':
+        responsePrompt = `You are responding to teacher ${user.name}. There was an error updating their session. Apologize for the technical issue and suggest they try again.`;
+        break;
+      case 'create_failed':
+        responsePrompt = `You are responding to teacher ${user.name}. There was an error creating their new session. Apologize for the technical issue and suggest they try again.`;
         break;
       default:
         responsePrompt = `You are responding to teacher ${user.name} in an ongoing conversation.
@@ -591,7 +656,7 @@ ${previousMessages}
 
 Current message: "${message}"
 Session action taken: ${sessionAction}
-Current students enrolled: ${session?.studentIds?.length || 0}
+Current students enrolled: ${currentSession?.studentIds?.length || 0}
 
 Generate a response that:
 1. Acknowledges their message contextually
@@ -600,7 +665,7 @@ Generate a response that:
 4. Provides clear next steps
 5. Maintains professional but friendly tone
 
-Keep response concise and helpful.`;
+Keep response concise and helpful.No placeholders ( keep it to the point ).`;
     }
 
     const response = await openai.chat.completions.create({
@@ -609,10 +674,11 @@ Keep response concise and helpful.`;
       temperature: 0.7
     });
 
+    // CRITICAL FIX: Return the updated session
     return res.json({
       success: true,
       response: response.choices[0].message.content,
-      session: session || null,
+      session: currentSession || null,
       sessionAction: sessionAction,
       extractedData,
       contextUsed: {
@@ -623,7 +689,8 @@ Keep response concise and helpful.`;
 
   } catch (error) {
     console.error('Error in handleTeacherInput:', error);
-    return res.status(500).json({ error: 'Error processing teacher input' });
+    console.error('Error stack:', error.stack);
+    return res.status(500).json({ error: 'Error processing teacher input: ' + error.message });
   }
 }
 
@@ -648,8 +715,18 @@ Extract from this student message and return ONLY valid JSON:
 - preferences: object with learning preferences
 - isJoinRequest: boolean (true if wanting to join a session)
 - isTimingUpdate: boolean (true if updating timing preferences)
-- isLeaving: boolean (true if wanting to leave session)
+- isLeaving: boolean (true if wanting to leave/remove from session, cancel participation, can't attend, won't be available, etc.)
 - isReplaceTimings: boolean (true if replacing all previous timings, false if adding to existing)
+
+IMPORTANT: Set isLeaving to true if the student expresses:
+- Cannot attend the session
+- Won't be available 
+- Wants to cancel participation
+- Needs to drop out
+- Can't make it to the session
+- Has to leave the session
+- Remove me from session
+- Any similar cancellation intent
 
 Current date: ${new Date().toISOString().split('T')[0]}
 
@@ -719,12 +796,32 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
     let sessionAction = 'none';
     let matchingSessions = [];
     let timingUpdateResult = null;
+    let removalResult = null;
 
-    // Handle leaving session
-    if (extractedData.isLeaving && session) {
-      const leaveResult = await handleStudentLeaving(user, session);
-      sessionAction = leaveResult.action;
-      session = leaveResult.session;
+    // Handle leaving session - Enhanced logic
+    if (extractedData.isLeaving) {
+      if (session) {
+        // Remove student from current session
+        removalResult = await handleStudentLeaving(user, session);
+        sessionAction = removalResult.action;
+        session = removalResult.session;
+      } else {
+        // If no current session, try to find sessions the student is enrolled in
+        const enrolledSessions = await Session.find({
+          studentIds: user._id,
+          status: { $in: ['pending', 'coordinated', 'scheduled'] }
+        }).populate('teacherId', 'name email');
+
+        if (enrolledSessions.length > 0) {
+          // Remove from all enrolled sessions or the most recent one
+          const sessionToLeave = enrolledSessions[0]; // or let user choose
+          removalResult = await handleStudentLeaving(user, sessionToLeave);
+          sessionAction = removalResult.action;
+          session = removalResult.session;
+        } else {
+          sessionAction = 'no_sessions_to_leave';
+        }
+      }
     }
     // Handle joining or timing updates
     else if ((extractedData.topics && extractedData.topics.length > 0) || extractedData.isJoinRequest) {
@@ -848,11 +945,13 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       message,
       embedding,
       metadata: {
-        intent: extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
+        intent: extractedData.isLeaving ? 'leaving_session' : 
+                extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
         extractedData,
         sessionAction: sessionAction,
         matchingSessionsCount: matchingSessions.length,
-        timingUpdateResult: timingUpdateResult
+        timingUpdateResult: timingUpdateResult,
+        removalResult: removalResult
       }
     });
 
@@ -861,7 +960,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       userId: user._id.toString(),
       role: 'student',
       message: message.substring(0, 500),
-      intent: extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
+      intent: extractedData.isLeaving ? 'leaving_session' : 
+              extractedData.isTimingUpdate ? 'timing_update' : 'session_inquiry',
       topics: extractedData.topics || [],
       session_action: sessionAction,
       timestamp: new Date().toISOString()
@@ -892,18 +992,20 @@ Current message: "${message}"
 Session action taken: ${sessionAction}
 Matching sessions found: ${matchingSessions.length}
 Timing update result: ${timingUpdateResult ? JSON.stringify(timingUpdateResult) : 'None'}
+Removal result: ${removalResult ? JSON.stringify(removalResult) : 'None'}
 
 ${session ? `Current session: ${session.topic} with ${session.studentIds.length} students` : 'No current session'}
 
 Generate a helpful response that:
 1. Acknowledges their message contextually
 2. Explains the action taken
-3. If timing was updated, explain the impact on scheduling
-4. If joined/updated session, confirms coordination with teacher
-5. If no matches, politely just inform them no lengthy text
+3. If student was removed from session, confirm the removal and any impact
+4. If timing was updated, explain the impact on scheduling
+5. If joined/updated session, confirms coordination with teacher
+6. If no matches, politely inform them briefly
 7. Maintains encouraging tone
 
-Keep onpoint and concise`;
+Keep it concise and to the point. No placeholders.`;
 
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
@@ -926,6 +1028,7 @@ Keep onpoint and concise`;
       })),
       extractedData,
       timingUpdateResult,
+      removalResult,
       contextUsed: {
         previousMessages: context.conversationHistory.length,
         contextMatches: context.contextMatches.length
@@ -938,58 +1041,68 @@ Keep onpoint and concise`;
   }
 }
 
-// NEW: Handle student leaving with proper cleanup
+// Enhanced handleStudentLeaving function
 async function handleStudentLeaving(user, session) {
-  console.log(`Student ${user.name} leaving session ${session._id}`);
-  
-  // Store original schedule for comparison
-  const originalSchedule = session.schedule ? { ...session.schedule } : null;
-  
-  // Remove student from session
-  session.studentIds = session.studentIds.filter(id => !id.equals(user._id));
-  
-  // Remove student's timing preferences
-  if (session.studentTimingPreferences) {
-    session.studentTimingPreferences = session.studentTimingPreferences.filter(
-      pref => !pref.studentId.equals(user._id)
-    );
-  }
-  
-  let action = 'left_session';
-  
-  // Check if session should be deleted or updated
-  if (session.studentIds.length === 0) {
-    // No students left, delete the session
-    await Session.deleteOne({ _id: session._id });
-    action = 'session_deleted';
-    session = null;
-    console.log(`Session ${session._id} deleted - no students remaining`);
-  } else {
-    // Recalculate timing for remaining students
-    const timingResult = await recalculateOptimalTiming(session);
-    await session.save();
+  try {
+    console.log(`Processing student leaving: ${user.name} from session ${session._id}`);
     
-    // Check if schedule changed significantly
-    if (originalSchedule && session.schedule) {
-      const scheduleChanged = (
-        originalSchedule.startTime !== session.schedule.startTime ||
-        originalSchedule.endTime !== session.schedule.endTime ||
-        originalSchedule.date !== session.schedule.date
-      );
-      
-      if (scheduleChanged) {
-        action = 'left_session_schedule_changed';
-        console.log(`Session schedule changed after student left:`, {
-          original: originalSchedule,
-          new: session.schedule
-        });
-      }
+    // Check if student is actually enrolled
+    const isEnrolled = session.studentIds.some(studentId => 
+      studentId.toString() === user._id.toString()
+    );
+    
+    if (!isEnrolled) {
+      return {
+        action: 'not_enrolled',
+        session: session,
+        message: 'Student was not enrolled in this session'
+      };
     }
     
-    console.log(`Session ${session._id} updated after student left`);
+    // Remove student from session
+    session.studentIds = session.studentIds.filter(studentId => 
+      studentId.toString() !== user._id.toString()
+    );
+    
+    // Remove student's timing preferences
+    if (session.studentTimingPreferences) {
+      session.studentTimingPreferences = session.studentTimingPreferences.filter(pref => 
+        pref.studentId.toString() !== user._id.toString()
+      );
+    }
+    
+    // Recalculate optimal timing if other students remain
+    let timingRecalculated = false;
+    if (session.studentIds.length > 0) {
+      const recalculateResult = await recalculateOptimalTiming(session);
+      timingRecalculated = recalculateResult.success;
+    }
+    
+    // Update session status if no students left
+    if (session.studentIds.length === 0) {
+      session.status = 'pending'; // Reset to pending for new students
+    }
+    
+    await session.save();
+    
+    console.log(`Student ${user.name} successfully removed from session ${session._id}`);
+    
+    return {
+      action: 'student_removed',
+      session: session,
+      studentsRemaining: session.studentIds.length,
+      timingRecalculated: timingRecalculated,
+      message: `Student removed successfully. ${session.studentIds.length} students remaining.`
+    };
+    
+  } catch (error) {
+    console.error('Error in handleStudentLeaving:', error);
+    return {
+      action: 'error',
+      session: session,
+      message: 'Error removing student from session'
+    };
   }
-  
-  return { action, session };
 }
 
 // NEW: Handle timing updates with proper conflict resolution
