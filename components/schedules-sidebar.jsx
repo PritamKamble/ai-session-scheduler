@@ -85,12 +85,17 @@ export function SchedulesSidebar() {
       const params = new URLSearchParams()
 
       params.append("userId", user.id)
-      // i want that if the user's primary  adddress is akshaynazare3@gmail.com then it is teacher
-      if (user.primaryEmailAddress?.emailAddress === "7276279026.pk@gmail.com" || "arjun6mahato@gmail.com" ){
-        params.append("userRole", "teacher")
-      } else{
-        params.append("userRole", "student")
-      }
+      const teacherEmails = [
+    "7276279026.pk@gmail.com",
+    "arjun6mahato@gmail.com", 
+    "akshayynazare@gmail.com"
+];
+
+if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
+    params.append("userRole", "teacher");
+} else {
+    params.append("userRole", "student");
+}
       params.append("page", currentPage.toString())
       params.append("limit", limit.toString())
 

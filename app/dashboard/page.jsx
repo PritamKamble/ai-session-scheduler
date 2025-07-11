@@ -76,7 +76,7 @@ const DashboardPage = () => {
       if (isLoaded && isSignedIn && user) {
         try {
           // Determine role based on email (you can modify this logic)
-          const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com"]
+          const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com",'akshayynazare@gmail.com']
           const userRole = teacherEmails.includes(user.primaryEmailAddress?.emailAddress) ? "teacher" : "student"
 
           setRole(userRole)

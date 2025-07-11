@@ -500,8 +500,6 @@ Keep response concise and helpful.`;
   }
 }
 
-// Student processing logic - Students can only join and influence timing
-// FIXED: Student processing logic - Students can only join and influence timing
 async function handleStudentInput(user, message, embedding, session, context, res) {
   try {
     const contextString = context.conversationHistory.length > 0 
@@ -562,7 +560,7 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       extractedData = JSON.parse(extraction.choices[0].message.content);
     } catch (parseError) {
       const fallbackExtraction = await openai.chat.completions.create({
-        model: 'gpt-3.5-turbo',
+        model: 'gpt-4o',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3
       });
@@ -600,40 +598,40 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
           pref => !pref.studentId.equals(user._id)
         );
       }
+      
+      // FIXED: Recalculate optimal timing for remaining students
+      await recalculateOptimalTiming(session);
       await session.save();
       sessionAction = 'left_session';
     }
-    // FIXED: Handle joining or timing updates - Check for topics OR general session joining
+    // Handle joining or timing updates
     else if ((extractedData.topics && extractedData.topics.length > 0) || extractedData.isJoinRequest) {
-      // FIXED: Find matching sessions - Include sessions with students already enrolled
+      // Find matching sessions
       matchingSessions = await Session.find({
         $and: [
-          // FIXED: Match by topic if provided, otherwise find any available session
           extractedData.topics && extractedData.topics.length > 0 ? {
             $or: [
               { topic: { $in: extractedData.topics } },
               { topic: { $regex: extractedData.topics.join('|'), $options: 'i' } }
             ]
           } : { topic: { $exists: true } },
-          // FIXED: Include sessions that are pending, coordinated, OR scheduled
           { status: { $in: ['pending', 'coordinated', 'scheduled'] } },
           { teacherId: { $exists: true, $ne: null } }
         ]
       })
       .populate('teacherId', 'name email')
-      .populate('studentIds', 'name email') // FIXED: Also populate student info for debugging
+      .populate('studentIds', 'name email')
       .limit(5);
 
       console.log(`Found ${matchingSessions.length} matching sessions for student ${user.name}`);
       
-      // FIXED: If student wants to join and there are matching sessions
+      // If student wants to join and there are matching sessions
       if (extractedData.isJoinRequest && matchingSessions.length > 0) {
         const bestMatch = matchingSessions[0];
         
         console.log(`Checking enrollment for student ${user._id} in session ${bestMatch._id}`);
         console.log(`Current students: ${bestMatch.studentIds.map(s => s._id).join(', ')}`);
         
-        // FIXED: Proper ObjectId comparison using toString()
         const isAlreadyEnrolled = bestMatch.studentIds.some(student => 
           student._id.toString() === user._id.toString()
         );
@@ -655,18 +653,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
               updatedAt: new Date()
             });
 
-            // Coordinate timing with teacher availability
-            if (bestMatch.teacherAvailability) {
-              const optimalTiming = findOptimalTiming(
-                bestMatch.teacherAvailability,
-                extractedData.availability
-              );
-              
-              if (optimalTiming) {
-                bestMatch.schedule = optimalTiming;
-                bestMatch.status = 'scheduled';
-              }
-            }
+            // FIXED: Recalculate optimal timing considering ALL students
+            await recalculateOptimalTiming(bestMatch);
           }
           
           await bestMatch.save();
@@ -681,9 +669,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
           console.log(`Student ${user.name} already enrolled in session ${bestMatch._id}`);
         }
       }
-      // FIXED: Handle case where no isJoinRequest but topics are provided
+      // Handle case where no isJoinRequest but topics are provided
       else if (extractedData.topics && extractedData.topics.length > 0 && !extractedData.isJoinRequest) {
-        // FIXED: Set default join request to true if topics are mentioned
         extractedData.isJoinRequest = true;
         
         if (matchingSessions.length > 0) {
@@ -706,17 +693,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
                 updatedAt: new Date()
               });
 
-              if (bestMatch.teacherAvailability) {
-                const optimalTiming = findOptimalTiming(
-                  bestMatch.teacherAvailability,
-                  extractedData.availability
-                );
-                
-                if (optimalTiming) {
-                  bestMatch.schedule = optimalTiming;
-                  bestMatch.status = 'scheduled';
-                }
-              }
+              // FIXED: Recalculate optimal timing considering ALL students
+              await recalculateOptimalTiming(bestMatch);
             }
             
             await bestMatch.save();
@@ -748,22 +726,8 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
           updatedAt: new Date()
         });
 
-        // Coordinate with teacher availability
-        if (session.teacherAvailability) {
-          const allStudentPrefs = session.studentTimingPreferences.flatMap(
-            pref => pref.preferences
-          );
-          
-          const optimalTiming = findOptimalTiming(
-            session.teacherAvailability,
-            allStudentPrefs
-          );
-          
-          if (optimalTiming) {
-            session.schedule = optimalTiming;
-            session.status = 'scheduled';
-          }
-        }
+        // FIXED: Recalculate optimal timing considering ALL students
+        await recalculateOptimalTiming(session);
         
         await session.save();
         sessionAction = 'updated_timing';
@@ -866,4 +830,199 @@ Keep response helpful and conversational.`;
     console.error('Error in handleStudentInput:', error);
     return res.status(500).json({ error: 'Error processing student input' });
   }
+}
+
+// FIXED: New helper function to recalculate optimal timing for all students
+async function recalculateOptimalTiming(session) {
+  if (!session.teacherAvailability || session.teacherAvailability.length === 0) {
+    console.log('No teacher availability found for session', session._id);
+    return;
+  }
+
+  if (!session.studentTimingPreferences || session.studentTimingPreferences.length === 0) {
+    // If no student preferences, use first teacher slot
+    session.schedule = session.teacherAvailability[0];
+    session.status = 'scheduled';
+    console.log('No student preferences, using first teacher slot');
+    return;
+  }
+
+  // Collect all student preferences
+  const allStudentPreferences = session.studentTimingPreferences.flatMap(
+    pref => pref.preferences
+  );
+
+  console.log(`Recalculating timing for ${session.studentTimingPreferences.length} students with ${allStudentPreferences.length} total preferences`);
+
+  // Find optimal timing that works for ALL students
+  const optimalTiming = findOptimalTimingForAllStudents(
+    session.teacherAvailability,
+    allStudentPreferences
+  );
+
+  if (optimalTiming) {
+    session.schedule = optimalTiming;
+    session.status = 'scheduled';
+    console.log('Found optimal timing for all students:', optimalTiming);
+  } else {
+    // If no perfect match, find best compromise
+    const compromiseTiming = findBestCompromiseTiming(
+      session.teacherAvailability,
+      allStudentPreferences
+    );
+    
+    if (compromiseTiming) {
+      session.schedule = compromiseTiming;
+      session.status = 'coordinated'; // Status indicates compromise needed
+      console.log('Using compromise timing:', compromiseTiming);
+    } else {
+      session.status = 'pending'; // No suitable timing found
+      console.log('No suitable timing found, session remains pending');
+    }
+  }
+}
+
+// FIXED: Enhanced function to find timing that works for ALL students
+function findOptimalTimingForAllStudents(teacherAvailability, allStudentPreferences) {
+  if (!teacherAvailability || teacherAvailability.length === 0) {
+    return null;
+  }
+
+  if (!allStudentPreferences || allStudentPreferences.length === 0) {
+    return teacherAvailability[0];
+  }
+
+  // Group student preferences by date
+  const preferencesByDate = {};
+  allStudentPreferences.forEach(pref => {
+    const dateKey = pref.date instanceof Date 
+      ? pref.date.toISOString().split('T')[0]
+      : pref.date;
+    
+    if (!preferencesByDate[dateKey]) {
+      preferencesByDate[dateKey] = [];
+    }
+    preferencesByDate[dateKey].push(pref);
+  });
+
+  // Find overlapping times for each date
+  for (const teacherSlot of teacherAvailability) {
+    const teacherDate = teacherSlot.date instanceof Date
+      ? teacherSlot.date.toISOString().split('T')[0]
+      : teacherSlot.date;
+    
+    const studentPrefsForDate = preferencesByDate[teacherDate];
+    
+    if (!studentPrefsForDate || studentPrefsForDate.length === 0) {
+      continue;
+    }
+
+    // Find time window that overlaps with ALL student preferences for this date
+    const overlap = findTimeOverlapForAllStudents(teacherSlot, studentPrefsForDate);
+    
+    if (overlap) {
+      return {
+        date: teacherSlot.date,
+        day: teacherSlot.day,
+        startTime: overlap.startTime,
+        endTime: overlap.endTime,
+        timezone: teacherSlot.timezone || 'UTC'
+      };
+    }
+  }
+
+  return null; // No timing that works for ALL students
+}
+
+// Helper function to find time overlap for all students on a specific date
+function findTimeOverlapForAllStudents(teacherSlot, studentPrefsForDate) {
+  let overlapStart = teacherSlot.startTime;
+  let overlapEnd = teacherSlot.endTime;
+
+  // For each student preference, narrow down the overlap window
+  for (const studentPref of studentPrefsForDate) {
+    const studentStart = studentPref.startTime;
+    const studentEnd = studentPref.endTime;
+
+    // Check if there's any overlap with this student
+    if (studentStart >= overlapEnd || studentEnd <= overlapStart) {
+      return null; // No overlap with this student
+    }
+
+    // Narrow the overlap window
+    overlapStart = overlapStart > studentStart ? overlapStart : studentStart;
+    overlapEnd = overlapEnd < studentEnd ? overlapEnd : studentEnd;
+  }
+
+  // Check if we still have a valid time window (at least 30 minutes)
+  const startMinutes = parseInt(overlapStart.split(':')[0]) * 60 + parseInt(overlapStart.split(':')[1]);
+  const endMinutes = parseInt(overlapEnd.split(':')[0]) * 60 + parseInt(overlapEnd.split(':')[1]);
+  
+  if (endMinutes - startMinutes >= 30) { // At least 30 minutes
+    return {
+      startTime: overlapStart,
+      endTime: overlapEnd
+    };
+  }
+
+  return null;
+}
+
+// FIXED: Function to find best compromise when no perfect match exists
+function findBestCompromiseTiming(teacherAvailability, allStudentPreferences) {
+  if (!teacherAvailability || teacherAvailability.length === 0) {
+    return null;
+  }
+
+  let bestMatch = null;
+  let maxCompatibleStudents = 0;
+
+  // Try each teacher slot and see how many students it can accommodate
+  for (const teacherSlot of teacherAvailability) {
+    const teacherDate = teacherSlot.date instanceof Date
+      ? teacherSlot.date.toISOString().split('T')[0]
+      : teacherSlot.date;
+
+    let compatibleStudents = 0;
+    let earliestStart = teacherSlot.startTime;
+    let latestEnd = teacherSlot.endTime;
+
+    // Count how many students can work with this teacher slot
+    for (const studentPref of allStudentPreferences) {
+      const studentDate = studentPref.date instanceof Date
+        ? studentPref.date.toISOString().split('T')[0]
+        : studentPref.date;
+
+      if (teacherDate === studentDate) {
+        // Check for any time overlap
+        if (teacherSlot.startTime < studentPref.endTime && 
+            teacherSlot.endTime > studentPref.startTime) {
+          compatibleStudents++;
+          
+          // Find the best compromise time window
+          if (studentPref.startTime > earliestStart) {
+            earliestStart = studentPref.startTime;
+          }
+          if (studentPref.endTime < latestEnd) {
+            latestEnd = studentPref.endTime;
+          }
+        }
+      }
+    }
+
+    // If this slot works for more students, use it
+    if (compatibleStudents > maxCompatibleStudents) {
+      maxCompatibleStudents = compatibleStudents;
+      bestMatch = {
+        date: teacherSlot.date,
+        day: teacherSlot.day,
+        startTime: earliestStart,
+        endTime: latestEnd,
+        timezone: teacherSlot.timezone || 'UTC',
+        compatibleStudents: compatibleStudents
+      };
+    }
+  }
+
+  return bestMatch;
 }
