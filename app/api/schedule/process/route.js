@@ -251,8 +251,21 @@ async function handleTeacherInput(user, message, embedding, session, context, re
     const prompt = `${contextString}Current teacher message: "${message}"
 
 IMPORTANT CONTEXT: Current session status: ${session ? 'EXISTS' : 'NO_SESSION'}
+${session ? `Current session details: Topic: "${session.topic}", Scheduled: ${session.schedule?.date} ${session.schedule?.startTime}-${session.schedule?.endTime}` : ''}
 
-Extract from this teacher message and return ONLY valid JSON:
+Analyze this teacher message and determine intent:
+
+CRITICAL DECISION LOGIC:
+- If the message offers teaching for a DIFFERENT subject/topic than existing session → isNewSession: true
+- If the message offers teaching at a COMPLETELY DIFFERENT time/date than existing session → isNewSession: true  
+- If the message uses words like "also", "another", "different", "new" → isNewSession: true
+- If the message uses words like "update", "change", "modify" existing session → isUpdate: true
+- If the message is clearly about canceling → isCancel: true
+- IMPORTANT: If canceling, specify the cancelSubject (what subject/topic they're canceling)
+- If they mention canceling a different subject than current session → check if cancelSubject matches current session topic
+- Default for new availability offerings → isNewSession: true
+
+Extract and return ONLY valid JSON:
 - expertise: array of topic strings
 - availability: array of objects with:
   - date: in YYYY-MM-DD format (future dates only)
@@ -261,29 +274,30 @@ Extract from this teacher message and return ONLY valid JSON:
   - endTime: in 24-hour format (HH:MM)
   - timezone: if specified (e.g., "EST")
 - preferences: object with any session preferences
-- isUpdate: boolean (true if this is updating existing availability)
-- isCancel: boolean (true if canceling/deleting session)
+- isUpdate: boolean (true ONLY if explicitly updating existing session)
+- isCancel: boolean (true if canceling/deleting a session)
+- isNewSession: boolean (true if this is a new/separate session - DEFAULT for new offerings)
+- cancelSubject: string (if isCancel is true, what subject/topic are they canceling - extract from message)
 
 Current date: ${new Date().toISOString().split('T')[0]}
 
 Example format:
 {
-  "expertise": ["Math", "Physics"],
+  "expertise": ["JavaScript"],
   "availability": [
     {
-      "date": "2025-06-29",
-      "day": "Sunday",
-      "startTime": "12:00",
-      "endTime": "14:00",
-      "timezone": "EST"
+      "date": "2025-07-12",
+      "day": "Saturday",
+      "startTime": "10:00",
+      "endTime": "12:00",
+      "timezone": "UTC"
     }
   ],
-  "preferences": {
-    "duration": "60 minutes",
-    "format": "online"
-  },
-  "isUpdate": true,
-  "isCancel": false
+  "preferences": {},
+  "isUpdate": false,
+  "isCancel": false,
+  "isNewSession": true,
+  "cancelSubject": ""
 }
 
 RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
@@ -312,6 +326,41 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
       extractedData = JSON.parse(jsonString);
     }
 
+    // Helper function to check if cancellation matches session topic
+    function doesCancellationMatchSession(cancelSubject, session) {
+      if (!session || !cancelSubject) return false;
+      
+      const sessionTopic = session.topic.toLowerCase();
+      const cancelTopic = cancelSubject.toLowerCase();
+      
+      // Direct match
+      if (sessionTopic.includes(cancelTopic) || cancelTopic.includes(sessionTopic)) {
+        return true;
+      }
+      
+      // Handle common aliases
+      const aliases = {
+        'js': 'javascript',
+        'javascript': 'js',
+        'go': 'golang',
+        'golang': 'go',
+        'py': 'python',
+        'python': 'py',
+        'react': 'reactjs',
+        'reactjs': 'react',
+        'node': 'nodejs',
+        'nodejs': 'node'
+      };
+      
+      const normalizedCancel = aliases[cancelTopic] || cancelTopic;
+      const normalizedSession = aliases[sessionTopic] || sessionTopic;
+      
+      return sessionTopic.includes(normalizedCancel) || 
+             cancelTopic.includes(normalizedSession) ||
+             normalizedSession.includes(cancelTopic) ||
+             normalizedCancel.includes(sessionTopic);
+    }
+
     // Process availability dates
     if (extractedData.availability) {
       extractedData.availability = extractedData.availability.map(slot => {
@@ -332,41 +381,109 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
 
     let sessionAction = 'none';
     
-    // Handle session cancellation
+    // Handle session cancellation with improved logic
     if (extractedData.isCancel) {
+      let sessionToDelete = null;
+      
+      // If there's a current session in context
       if (session) {
-        await Session.findByIdAndDelete(session._id);
+        // Check if the cancellation is for the current session's topic
+        if (extractedData.cancelSubject) {
+          if (doesCancellationMatchSession(extractedData.cancelSubject, session)) {
+            sessionToDelete = session;
+          } else {
+            // They're trying to cancel a different topic than current session
+            sessionAction = 'cancellation_topic_mismatch';
+          }
+        } else {
+          // No specific subject mentioned, assume they mean current session
+          sessionToDelete = session;
+        }
+      } else {
+        // No session in context, try to find specific session by topic
+        if (extractedData.cancelSubject) {
+          const existingSession = await Session.findOne({
+            teacherId: user._id,
+            status: { $in: ['pending', 'coordinated'] },
+            topic: { $regex: new RegExp(extractedData.cancelSubject, 'i') }
+          }).sort({ createdAt: -1 });
+          
+          if (existingSession) {
+            sessionToDelete = existingSession;
+          } else {
+            sessionAction = 'no_matching_session_to_delete';
+          }
+        } else {
+          // No specific subject and no session in context, find any session
+          const existingSession = await Session.findOne({
+            teacherId: user._id,
+            status: { $in: ['pending', 'coordinated'] }
+          }).sort({ createdAt: -1 });
+          
+          if (existingSession) {
+            sessionToDelete = existingSession;
+          } else {
+            sessionAction = 'no_session_to_delete';
+          }
+        }
+      }
+      
+      // Actually delete the session if found
+      if (sessionToDelete) {
+        await Session.findByIdAndDelete(sessionToDelete._id);
         session = null;
         sessionAction = 'deleted';
-      } else {
-        // Try to find any pending session for this teacher
-        const existingSession = await Session.findOne({
-          teacherId: user._id,
-          status: { $in: ['pending', 'coordinated'] }
-        }).sort({ createdAt: -1 });
-        
-        if (existingSession) {
-          await Session.findByIdAndDelete(existingSession._id);
-          session = null;
-          sessionAction = 'deleted';
-        } else {
-          sessionAction = 'no_session_to_delete';
-        }
       }
     }
     // Handle session creation/update
     else if (extractedData.availability && extractedData.availability.length > 0) {
       
-      // First, try to find existing session if not provided
-      if (!session) {
-        session = await Session.findOne({
-          teacherId: user._id,
-          status: { $in: ['pending', 'coordinated'] }
-        }).sort({ createdAt: -1 });
+      // IMPROVED LOGIC: Default to creating new sessions unless explicitly updating
+      let shouldCreateNewSession = false;
+      
+      // Default behavior: if teacher provides new availability, create new session
+      if (extractedData.availability && extractedData.availability.length > 0) {
+        shouldCreateNewSession = true;
+        
+        // Only update existing session if explicitly marked as update
+        if (extractedData.isUpdate && session) {
+          shouldCreateNewSession = false;
+        }
+        // Or if explicitly marked as update but no session in context, find existing
+        else if (extractedData.isUpdate && !session) {
+          session = await Session.findOne({
+            teacherId: user._id,
+            status: { $in: ['pending', 'coordinated'] }
+          }).sort({ createdAt: -1 });
+          
+          if (session) {
+            shouldCreateNewSession = false;
+          }
+        }
       }
 
-      // SIMPLIFIED LOGIC: If session exists, update it. If not, create new one.
-      if (session) {
+      if (shouldCreateNewSession) {
+        // CREATE NEW SESSION
+        const firstSlot = extractedData.availability[0];
+        session = new Session({
+          topic: extractedData.expertise?.join(', ') || 'General Teaching',
+          teacherId: user._id,
+          schedule: {
+            date: firstSlot.date,
+            day: firstSlot.day,
+            startTime: firstSlot.startTime,
+            endTime: firstSlot.endTime,
+            timezone: firstSlot.timezone || 'UTC'
+          },
+          status: 'pending',
+          teacherAvailability: extractedData.availability,
+          studentIds: [],
+          studentTimingPreferences: []
+        });
+        sessionAction = 'created_new';
+        await session.save();
+      } 
+      else if (session) {
         // UPDATE EXISTING SESSION
         session.teacherAvailability = extractedData.availability;
         
@@ -403,27 +520,6 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
         }
 
         sessionAction = 'updated_existing';
-        await session.save();
-      } 
-      else {
-        // CREATE NEW SESSION
-        const firstSlot = extractedData.availability[0];
-        session = new Session({
-          topic: extractedData.expertise?.join(', ') || 'General Teaching',
-          teacherId: user._id,
-          schedule: {
-            date: firstSlot.date,
-            day: firstSlot.day,
-            startTime: firstSlot.startTime,
-            endTime: firstSlot.endTime,
-            timezone: firstSlot.timezone || 'UTC'
-          },
-          status: 'pending',
-          teacherAvailability: extractedData.availability,
-          studentIds: [],
-          studentTimingPreferences: []
-        });
-        sessionAction = 'created_new';
         await session.save();
       }
     }
@@ -480,6 +576,12 @@ RESPOND WITH ONLY THE JSON OBJECT, NO OTHER TEXT.`;
         break;
       case 'no_session_to_delete':
         responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session but no active session was found. Politely inform them there's no active session to cancel.`;
+        break;
+      case 'cancellation_topic_mismatch':
+        responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session for "${extractedData.cancelSubject}" but their current active session is for "${session.topic}". Let them know their current ${session.topic} session is still active, and ask if they want to cancel that instead or if they meant something else.`;
+        break;
+      case 'no_matching_session_to_delete':
+        responsePrompt = `You are responding to teacher ${user.name}. They tried to cancel a session for "${extractedData.cancelSubject}" but no matching session was found for that topic. Politely inform them that no matching session was found to cancel.`;
         break;
       default:
         responsePrompt = `You are responding to teacher ${user.name} in an ongoing conversation.
