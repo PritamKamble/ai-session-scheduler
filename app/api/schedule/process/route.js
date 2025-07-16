@@ -4,6 +4,7 @@ import { User } from '@/models/user';
 import { Session } from '@/models/session';
 import { Context } from '@/models/context';
 import { StudentAvailability } from '@/models/studentAvailability';
+import { TeacherAvailability } from '@/models/teacherAvailability';
 import { NextResponse } from 'next/server';
 import connectDB from '@/config/db';
 
@@ -23,48 +24,60 @@ const index = pinecone.index(indexName);
 // Connect to MongoDB
 await connectDB();
 
-// GPT-4o analysis prompt for student availability
+// GPT-4o analysis prompt for availability extraction
 const AVAILABILITY_ANALYSIS_PROMPT = `
-You are an AI assistant that analyzes student messages to extract learning subject preferences and availability information.
+You are an AI assistant that analyzes messages to extract availability information.
 
-Extract the following information from the student's message:
-1. Subject they want to learn (normalize related topics - e.g., "React hooks" → "react")
-2. Their availability (days, times, dates if mentioned)
-3. Learning preferences (duration, level, format if mentioned)
+For STUDENTS: Extract subject they want to learn AND their availability.
+For TEACHERS: Extract ONLY their availability (no subject needed).
+
+Extract the following information:
+1. Availability (days, times, dates if mentioned)
+2. For students only: Subject they want to learn
+3. Learning/teaching preferences (duration, level, format if mentioned)
 
 Return JSON in this format:
 {
-  "subject": "extracted_subject",
+  "intent": "availability_submission" | "general_inquiry",
   "availability": [
     {
       "day": "monday",
       "startTime": "14:00",
       "endTime": "16:00",
-      "date": "2025-07-20" // if specific date mentioned
+      "date": "2025-07-20" // if specific date mentioned, otherwise null
     }
   ],
+  "subject": "extracted_subject_for_students_only",
   "preferences": {
     "duration": "2 hours",
     "level": "beginner",
     "format": "interactive"
-  },
-  "intent": "availability_submission"
+  }
 }
 
-If the message doesn't contain availability information, return:
+If no availability information is found, return:
 {
   "intent": "general_inquiry",
-  "subject": "extracted_subject_if_any"
+  "message": "Please provide your availability information"
 }
+
+Examples:
+- Student: "I want to learn React and I'm available Monday 2-4 PM" → extract subject "react" + availability
+- Teacher: "I'm available Monday 2-4 PM and Wednesday 3-5 PM" → extract only availability
+- Student: "I want to learn React hooks on weekends" → subject "react" + weekend availability
 `;
 
 // Function to analyze message with GPT-4o
-async function analyzeStudentMessage(message) {
+async function analyzeAvailabilityMessage(message, userRole) {
   try {
+    const roleContext = userRole === 'teacher' ? 
+      'This is a TEACHER message - extract only availability.' : 
+      'This is a STUDENT message - extract subject and availability.';
+    
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
-        { role: 'system', content: AVAILABILITY_ANALYSIS_PROMPT },
+        { role: 'system', content: AVAILABILITY_ANALYSIS_PROMPT + '\n\n' + roleContext },
         { role: 'user', content: message }
       ],
       temperature: 0.1,
@@ -74,15 +87,42 @@ async function analyzeStudentMessage(message) {
     return JSON.parse(response.choices[0].message.content);
   } catch (error) {
     console.error('Error analyzing message:', error);
-    return { intent: 'general_inquiry' };
+    return { intent: 'general_inquiry', message: 'Could not analyze message' };
   }
+}
+
+// Function to normalize subject for better matching
+function normalizeSubject(subject) {
+  if (!subject) return null;
+  
+  const normalized = subject.toLowerCase().trim();
+  
+  // Subject mapping for related topics
+  const subjectMap = {
+    'react': ['react', 'reactjs', 'react.js', 'react hooks', 'react components', 'react native'],
+    'javascript': ['javascript', 'js', 'vanilla js', 'es6', 'node.js', 'nodejs'],
+    'python': ['python', 'python3', 'django', 'flask', 'fastapi'],
+    'java': ['java', 'spring', 'spring boot', 'hibernate'],
+    'css': ['css', 'css3', 'styling', 'bootstrap', 'tailwind'],
+    'html': ['html', 'html5', 'markup', 'web development'],
+    'database': ['sql', 'mysql', 'postgresql', 'mongodb', 'database'],
+    'web': ['web development', 'frontend', 'backend', 'fullstack']
+  };
+  
+  // Find the main subject category
+  for (const [mainSubject, variants] of Object.entries(subjectMap)) {
+    if (variants.some(variant => normalized.includes(variant))) {
+      return mainSubject;
+    }
+  }
+  
+  return normalized;
 }
 
 // Function to store student availability
 async function storeStudentAvailability(studentId, subject, availability, preferences) {
   try {
-    // Normalize subject for better matching
-    const normalizedSubject = StudentAvailability.normalizeSubject(subject);
+    const normalizedSubject = normalizeSubject(subject);
     
     // Check if student already has availability for this subject
     let existingAvailability = await StudentAvailability.findOne({
@@ -94,6 +134,7 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
     if (existingAvailability) {
       // Update existing availability
       existingAvailability.availability = availability;
+      existingAvailability.preferences = preferences;
       existingAvailability.createdAt = new Date();
       existingAvailability.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
       await existingAvailability.save();
@@ -110,40 +151,113 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
       return newAvailability;
     }
   } catch (error) {
-    console.error('Error storing availability:', error);
+    console.error('Error storing student availability:', error);
     throw error;
   }
 }
 
-// Function to check for viable sessions and create them
-async function checkAndCreateSessions(subject, minStudents = 5) {
+// Function to store teacher availability
+async function storeTeacherAvailability(teacherId, availability) {
   try {
-    const normalizedSubject = StudentAvailability.normalizeSubject(subject);
-    
-    // Find overlapping availabilities
-    const viableWindows = await StudentAvailability.findOverlappingAvailability(
-      normalizedSubject, 
-      minStudents
-    );
+    // Check if teacher already has availability
+    let existingAvailability = await TeacherAvailability.findOne({ teacherId });
 
-    const createdSessions = [];
+    if (existingAvailability) {
+      // Update existing availability
+      existingAvailability.availability = availability;
+      existingAvailability.updatedAt = new Date();
+      await existingAvailability.save();
+      return existingAvailability;
+    } else {
+      // Create new availability
+      const newAvailability = new TeacherAvailability({
+        teacherId,
+        availability
+      });
+      await newAvailability.save();
+      return newAvailability;
+    }
+  } catch (error) {
+    console.error('Error storing teacher availability:', error);
+    throw error;
+  }
+}
 
-    for (const window of viableWindows) {
-      // Create session for this time window
+// Function to find overlapping time windows
+function findOverlappingTimeWindows(studentAvailabilities, teacherAvailabilities) {
+  const overlaps = [];
+  
+  // Group students by time windows
+  const timeWindowGroups = {};
+  
+  studentAvailabilities.forEach(studentAvail => {
+    studentAvail.availability.forEach(slot => {
+      const key = `${slot.day}_${slot.startTime}_${slot.endTime}`;
+      if (!timeWindowGroups[key]) {
+        timeWindowGroups[key] = {
+          day: slot.day,
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          date: slot.date,
+          students: [],
+          subject: studentAvail.subject
+        };
+      }
+      timeWindowGroups[key].students.push({
+        studentId: studentAvail.studentId,
+        availabilityId: studentAvail._id
+      });
+    });
+  });
+  
+  // Check which time windows have teacher availability and enough students
+  Object.values(timeWindowGroups).forEach(window => {
+    if (window.students.length >= 5) {
+      // Check if any teacher is available at this time
+      const teacherAvailable = teacherAvailabilities.some(teacherAvail =>
+        teacherAvail.availability.some(slot =>
+          slot.day === window.day &&
+          slot.startTime <= window.startTime &&
+          slot.endTime >= window.endTime
+        )
+      );
+      
+      if (teacherAvailable) {
+        overlaps.push(window);
+      }
+    }
+  });
+  
+  return overlaps;
+}
+
+// Function to create sessions from overlapping windows
+async function createSessionsFromOverlaps(overlaps) {
+  const createdSessions = [];
+  
+  // Get teacher (assuming single teacher for now)
+  const teacher = await User.findOne({ role: 'teacher' });
+  if (!teacher) {
+    throw new Error('No teacher found');
+  }
+  
+  for (const overlap of overlaps) {
+    try {
+      // Create session
       const session = new Session({
-        topic: normalizedSubject,
-        teacherId: null, // Will be assigned later when teacher joins
-        studentIds: window.students.map(s => s.studentId),
+        topic: overlap.subject,
+        teacherId: teacher._id,
+        studentIds: overlap.students.map(s => s.studentId),
         schedule: {
-          day: window.day,
-          startTime: window.startTime,
-          endTime: window.endTime,
-          date: window.date,
-          timezone: window.timezone
+          day: overlap.day,
+          startTime: overlap.startTime,
+          endTime: overlap.endTime,
+          date: overlap.date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default to next week
+          timezone: 'UTC'
         },
         status: 'pending',
         preferences: {
-          duration: `${calculateDuration(window.startTime, window.endTime)} hours`,
+          duration: calculateDuration(overlap.startTime, overlap.endTime),
           format: 'group',
           level: 'mixed'
         }
@@ -154,13 +268,38 @@ async function checkAndCreateSessions(subject, minStudents = 5) {
 
       // Update student availabilities to 'matched' status
       await StudentAvailability.updateMany(
-        { 
-          _id: { $in: window.students.map(s => s.availabilityId) }
-        },
+        { _id: { $in: overlap.students.map(s => s.availabilityId) } },
         { status: 'matched' }
       );
-    }
 
+    } catch (error) {
+      console.error('Error creating session:', error);
+    }
+  }
+  
+  return createdSessions;
+}
+
+// Function to check and create sessions
+async function checkAndCreateSessions(subject = null) {
+  try {
+    // Get all pending student availabilities
+    const studentQuery = { status: 'pending' };
+    if (subject) {
+      studentQuery.subject = normalizeSubject(subject);
+    }
+    
+    const studentAvailabilities = await StudentAvailability.find(studentQuery);
+    
+    // Get all teacher availabilities
+    const teacherAvailabilities = await TeacherAvailability.find({});
+    
+    // Find overlapping time windows
+    const overlaps = findOverlappingTimeWindows(studentAvailabilities, teacherAvailabilities);
+    
+    // Create sessions from overlaps
+    const createdSessions = await createSessionsFromOverlaps(overlaps);
+    
     return createdSessions;
   } catch (error) {
     console.error('Error checking and creating sessions:', error);
@@ -172,7 +311,8 @@ async function checkAndCreateSessions(subject, minStudents = 5) {
 function calculateDuration(startTime, endTime) {
   const start = new Date(`2000-01-01T${startTime}:00`);
   const end = new Date(`2000-01-01T${endTime}:00`);
-  return Math.abs(end - start) / (1000 * 60 * 60); // hours
+  const hours = Math.abs(end - start) / (1000 * 60 * 60);
+  return `${hours} hours`;
 }
 
 // Function to store context in Pinecone
@@ -188,7 +328,7 @@ async function storeContext(userId, message, analysis, sessionId = null) {
     const context = new Context({
       sessionId,
       userId,
-      role: 'student',
+      role: (await User.findById(userId)).role,
       message,
       embedding,
       metadata: {
@@ -235,99 +375,120 @@ export async function POST(req) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    // Only handle student requests
-    if (user.role !== 'student') {
-      return NextResponse.json({ error: 'This endpoint is for students only' }, { status: 403 });
-    }
-
     // Analyze message with GPT-4o
-    const analysis = await analyzeStudentMessage(message);
+    const analysis = await analyzeAvailabilityMessage(message, user.role);
     
     // Store context
     await storeContext(user._id, message, analysis, sessionId);
 
-    // Handle based on intent
-    if (analysis.intent === 'availability_submission' && analysis.subject && analysis.availability) {
+    // Handle based on user role and intent
+    if (analysis.intent === 'availability_submission' && analysis.availability) {
       
-      // Store student availability
-      const availability = await storeStudentAvailability(
-        user._id,
-        analysis.subject,
-        analysis.availability,
-        analysis.preferences
-      );
+      if (user.role === 'student') {
+        // Handle student availability
+        if (!analysis.subject) {
+          return NextResponse.json({
+            message: "Please specify what subject you want to learn along with your availability.",
+            analysis
+          });
+        }
 
-      // Check for viable sessions
-      const createdSessions = await checkAndCreateSessions(analysis.subject);
+        // Store student availability
+        const availability = await storeStudentAvailability(
+          user._id,
+          analysis.subject,
+          analysis.availability,
+          analysis.preferences
+        );
 
-      let response = {
-        message: `Great! I've recorded your availability for ${analysis.subject}.`,
-        analysis,
-        availability: availability._id,
-        sessionsCreated: createdSessions.length
-      };
+        // Check for viable sessions
+        const createdSessions = await checkAndCreateSessions(analysis.subject);
 
-      if (createdSessions.length > 0) {
-        response.message += ` Good news! I found ${createdSessions.length} viable session(s) with enough students. Sessions have been created and you'll be notified when teachers join.`;
-        response.sessions = createdSessions.map(session => ({
-          id: session._id,
-          topic: session.topic,
-          schedule: session.schedule,
-          studentCount: session.studentIds.length
-        }));
-      } else {
-        // Check how many students are currently available for this subject
-        const currentAvailability = await StudentAvailability.countDocuments({
-          subject: StudentAvailability.normalizeSubject(analysis.subject),
-          status: 'pending'
-        });
-        response.message += ` Currently ${currentAvailability} students are available for ${analysis.subject}. We need at least 5 students to create a session.`;
-      }
+        let response = {
+          message: `Great! I've recorded your availability for ${analysis.subject}.`,
+          analysis,
+          availability: availability._id,
+          sessionsCreated: createdSessions.length
+        };
 
-      return NextResponse.json(response);
-
-    } else if (analysis.intent === 'general_inquiry') {
-      
-      // Handle general inquiries about subjects or availability
-      let response = {
-        message: "I can help you find learning sessions! Please provide your availability for the subject you want to learn.",
-        analysis,
-        suggestion: "Try saying something like: 'I want to learn React and I'm available Monday 2-4 PM and Wednesday 3-5 PM'"
-      };
-
-      if (analysis.subject) {
-        // Check existing sessions for this subject
-        const existingSessions = await Session.find({
-          topic: StudentAvailability.normalizeSubject(analysis.subject),
-          status: 'pending'
-        }).populate('studentIds', 'name');
-
-        if (existingSessions.length > 0) {
-          response.message += ` I found ${existingSessions.length} existing session(s) for ${analysis.subject}. Would you like to join one or create your own availability?`;
-          response.existingSessions = existingSessions.map(session => ({
+        if (createdSessions.length > 0) {
+          response.message += ` Excellent! I created ${createdSessions.length} session(s) with enough students and teacher availability.`;
+          response.sessions = createdSessions.map(session => ({
             id: session._id,
+            topic: session.topic,
             schedule: session.schedule,
             studentCount: session.studentIds.length
           }));
+        } else {
+          // Check current status
+          const currentStudents = await StudentAvailability.countDocuments({
+            subject: normalizeSubject(analysis.subject),
+            status: 'pending'
+          });
+          response.message += ` Currently ${currentStudents} students are interested in ${analysis.subject}. We need 5+ students with matching availability to create a session.`;
         }
+
+        return NextResponse.json(response);
+
+      } else if (user.role === 'teacher') {
+        // Handle teacher availability
+        const availability = await storeTeacherAvailability(user._id, analysis.availability);
+
+        // Check for viable sessions across all subjects
+        const createdSessions = await checkAndCreateSessions();
+
+        let response = {
+          message: "Great! I've recorded your teaching availability.",
+          analysis,
+          availability: availability._id,
+          sessionsCreated: createdSessions.length
+        };
+
+        if (createdSessions.length > 0) {
+          response.message += ` Perfect! I created ${createdSessions.length} session(s) where your availability matches with student groups.`;
+          response.sessions = createdSessions.map(session => ({
+            id: session._id,
+            topic: session.topic,
+            schedule: session.schedule,
+            studentCount: session.studentIds.length
+          }));
+        } else {
+          response.message += " I'm monitoring for student groups that match your availability.";
+        }
+
+        return NextResponse.json(response);
       }
+
+    } else if (analysis.intent === 'general_inquiry') {
+      
+      let response = {
+        message: user.role === 'student' ? 
+          "I can help you find learning sessions! Please provide the subject you want to learn and your availability." :
+          "I can help you manage your teaching schedule! Please provide your availability times.",
+        analysis,
+        suggestion: user.role === 'student' ? 
+          "Try saying: 'I want to learn React and I'm available Monday 2-4 PM and Wednesday 3-5 PM'" :
+          "Try saying: 'I'm available Monday 2-4 PM, Wednesday 3-5 PM, and Friday 1-3 PM'"
+      };
 
       return NextResponse.json(response);
 
     } else {
       return NextResponse.json({
-        message: "I didn't understand your request. Please provide your subject preference and availability times.",
+        message: user.role === 'student' ? 
+          "Please provide your subject preference and availability times." :
+          "Please provide your availability times for teaching.",
         analysis
       });
     }
 
   } catch (error) {
-    console.error('Error in student availability route:', error);
+    console.error('Error in availability route:', error);
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
 
-// GET handler to check current availability status
+// GET handler to check current status
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
@@ -343,31 +504,57 @@ export async function GET(req) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    let query = { studentId: user._id, status: 'pending' };
-    if (subject) {
-      query.subject = StudentAvailability.normalizeSubject(subject);
-    }
+    if (user.role === 'student') {
+      let query = { studentId: user._id, status: 'pending' };
+      if (subject) {
+        query.subject = normalizeSubject(subject);
+      }
 
-    const availabilities = await StudentAvailability.find(query);
-    
-    const response = {
-      availabilities,
-      totalActive: availabilities.length
-    };
-
-    // If specific subject requested, also show potential sessions
-    if (subject) {
-      const viableWindows = await StudentAvailability.findOverlappingAvailability(subject, 5);
-      response.potentialSessions = viableWindows.length;
+      const availabilities = await StudentAvailability.find(query);
       
-      const currentCount = await StudentAvailability.countDocuments({
-        subject: StudentAvailability.normalizeSubject(subject),
-        status: 'pending'
-      });
-      response.studentsWaiting = currentCount;
-    }
+      const response = {
+        userRole: 'student',
+        availabilities,
+        totalActive: availabilities.length
+      };
 
-    return NextResponse.json(response);
+      // Subject-specific stats
+      if (subject) {
+        const normalizedSubject = normalizeSubject(subject);
+        const subjectStats = await StudentAvailability.aggregate([
+          { $match: { subject: normalizedSubject, status: 'pending' } },
+          { $group: { _id: null, count: { $sum: 1 } } }
+        ]);
+        response.subjectStats = {
+          subject: normalizedSubject,
+          studentsWaiting: subjectStats[0]?.count || 0,
+          needsMore: Math.max(0, 5 - (subjectStats[0]?.count || 0))
+        };
+      }
+
+      return NextResponse.json(response);
+
+    } else if (user.role === 'teacher') {
+      const availability = await TeacherAvailability.findOne({ teacherId: user._id });
+      
+      // Get sessions where this teacher is assigned
+      const sessions = await Session.find({ teacherId: user._id }).populate('studentIds', 'name');
+      
+      const response = {
+        userRole: 'teacher',
+        availability,
+        sessions: sessions.map(session => ({
+          id: session._id,
+          topic: session.topic,
+          schedule: session.schedule,
+          studentCount: session.studentIds.length,
+          status: session.status
+        })),
+        totalSessions: sessions.length
+      };
+
+      return NextResponse.json(response);
+    }
 
   } catch (error) {
     console.error('Error in GET handler:', error);
