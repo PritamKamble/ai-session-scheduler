@@ -10,7 +10,7 @@ import connectDB from '@/config/db';
 
 // Initialize OpenAI
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey:process.env.OPENAI_API_KEY,
 });
 
 // Initialize Pinecone
@@ -119,10 +119,51 @@ function normalizeSubject(subject) {
   return normalized;
 }
 
+// Function to process and normalize availability slots
+function processAvailabilitySlots(availability) {
+  if (!availability || !Array.isArray(availability)) {
+    return [];
+  }
+
+  return availability.map(slot => {
+    const processedSlot = {
+      day: slot.day,
+      startTime: slot.startTime,
+      endTime: slot.endTime
+    };
+
+    // Handle date field - if null/undefined, provide a default future date
+    if (slot.date && slot.date !== null && slot.date !== undefined) {
+      // Validate date format (basic check)
+      const dateObj = new Date(slot.date);
+      if (!isNaN(dateObj.getTime())) {
+        processedSlot.date = slot.date;
+      } else {
+        // If invalid date, use next week as default
+        processedSlot.date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      }
+    } else {
+      // If no date provided, use next week as default
+      processedSlot.date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    }
+
+    return processedSlot;
+  });
+}
+
 // Function to store student availability
 async function storeStudentAvailability(studentId, subject, availability, preferences) {
   try {
     const normalizedSubject = normalizeSubject(subject);
+    const processedAvailability = processAvailabilitySlots(availability);
+    
+    // Validate processed availability has required fields
+    const validatedAvailability = processedAvailability.map(slot => ({
+      day: slot.day || 'monday',
+      startTime: slot.startTime || '09:00',
+      endTime: slot.endTime || '10:00',
+      date: slot.date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+    }));
     
     // Check if student already has availability for this subject
     let existingAvailability = await StudentAvailability.findOne({
@@ -133,8 +174,8 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
 
     if (existingAvailability) {
       // Update existing availability
-      existingAvailability.availability = availability;
-      existingAvailability.preferences = preferences;
+      existingAvailability.availability = validatedAvailability;
+      existingAvailability.preferences = preferences || {};
       existingAvailability.createdAt = new Date();
       existingAvailability.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
       await existingAvailability.save();
@@ -144,14 +185,20 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
       const newAvailability = new StudentAvailability({
         studentId,
         subject: normalizedSubject,
-        availability,
-        preferences
+        availability: validatedAvailability,
+        preferences: preferences || {}
       });
       await newAvailability.save();
       return newAvailability;
     }
   } catch (error) {
     console.error('Error storing student availability:', error);
+    console.error('Data being saved:', {
+      studentId,
+      subject: normalizeSubject(subject),
+      availability: processAvailabilitySlots(availability),
+      preferences
+    });
     throw error;
   }
 }
@@ -159,12 +206,14 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
 // Function to store teacher availability
 async function storeTeacherAvailability(teacherId, availability) {
   try {
+    const processedAvailability = processAvailabilitySlots(availability);
+    
     // Check if teacher already has availability
     let existingAvailability = await TeacherAvailability.findOne({ teacherId });
 
     if (existingAvailability) {
       // Update existing availability
-      existingAvailability.availability = availability;
+      existingAvailability.availability = processedAvailability;
       existingAvailability.updatedAt = new Date();
       await existingAvailability.save();
       return existingAvailability;
@@ -172,7 +221,7 @@ async function storeTeacherAvailability(teacherId, availability) {
       // Create new availability
       const newAvailability = new TeacherAvailability({
         teacherId,
-        availability
+        availability: processedAvailability
       });
       await newAvailability.save();
       return newAvailability;
@@ -338,18 +387,28 @@ async function storeContext(userId, message, analysis, sessionId = null) {
     });
     await context.save();
 
-    // Store in Pinecone
+    // Store in Pinecone - handle null/undefined subject for teachers
     const contextId = `context_${context._id}`;
+    const pineconeMetadata = {
+      userId: userId.toString(),
+      intent: analysis.intent || 'general_inquiry',
+      timestamp: new Date().toISOString()
+    };
+
+    // Only add subject if it exists (for students)
+    if (analysis.subject) {
+      pineconeMetadata.subject = analysis.subject;
+    }
+
+    // Only add sessionId if it exists
+    if (sessionId) {
+      pineconeMetadata.sessionId = sessionId.toString();
+    }
+
     await index.namespace('conversations').upsert([{
       id: contextId,
       values: embedding,
-      metadata: {
-        userId: userId.toString(),
-        sessionId: sessionId?.toString(),
-        intent: analysis.intent,
-        subject: analysis.subject,
-        timestamp: new Date().toISOString()
-      }
+      metadata: pineconeMetadata
     }]);
 
     return context;
