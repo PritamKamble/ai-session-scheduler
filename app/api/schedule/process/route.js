@@ -121,8 +121,52 @@ function normalizeSubject(subject) {
 
 // Function to convert time string to minutes for comparison
 function timeToMinutes(timeStr) {
-  const [hours, minutes] = timeStr.split(':').map(Number);
+  if (!timeStr || typeof timeStr !== 'string') {
+    console.log('Invalid time string:', timeStr);
+    return 0;
+  }
+  
+  const parts = timeStr.split(':');
+  if (parts.length !== 2) {
+    console.log('Invalid time format:', timeStr);
+    return 0;
+  }
+  
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  
+  if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+    console.log('Invalid time values:', timeStr);
+    return 0;
+  }
+  
   return hours * 60 + minutes;
+}
+
+function normalizeDayName(day) {
+  if (!day || typeof day !== 'string') {
+    return 'monday'; // default fallback
+  }
+  
+  const dayMap = {
+    'mon': 'monday',
+    'tue': 'tuesday', 
+    'wed': 'wednesday',
+    'thu': 'thursday',
+    'fri': 'friday',
+    'sat': 'saturday',
+    'sun': 'sunday',
+    'monday': 'monday',
+    'tuesday': 'tuesday',
+    'wednesday': 'wednesday', 
+    'thursday': 'thursday',
+    'friday': 'friday',
+    'saturday': 'saturday',
+    'sunday': 'sunday'
+  };
+  
+  const normalized = day.toLowerCase().trim();
+  return dayMap[normalized] || normalized;
 }
 
 // Function to check if student availability overlaps with ANY teacher availability
@@ -182,9 +226,9 @@ function processAvailabilitySlots(availability) {
 
   return availability.map(slot => {
     const processedSlot = {
-      day: slot.day.toLowerCase(),
-      startTime: slot.startTime,
-      endTime: slot.endTime
+      day: normalizeDayName(slot.day), // Use normalized day
+      startTime: slot.startTime || '09:00',
+      endTime: slot.endTime || '10:00'
     };
 
     // Handle date field - if null/undefined, provide a default future date
@@ -203,139 +247,238 @@ function processAvailabilitySlots(availability) {
   });
 }
 
+
 // Function to find overlapping time windows between students
-function findStudentOverlaps(studentAvailabilities, teacherAvailabilities) {
-  const overlaps = [];
+async function findStudentOverlaps(studentAvailabilities, teacherAvailabilities) {
+  const viableSessions = [];
   
-  // Group students by subject
-  const subjectGroups = {};
-  studentAvailabilities.forEach(studentAvail => {
-    if (!subjectGroups[studentAvail.subject]) {
-      subjectGroups[studentAvail.subject] = [];
+  // First group students by subject
+  const studentsBySubject = {};
+  studentAvailabilities.forEach(student => {
+    if (!studentsBySubject[student.subject]) {
+      studentsBySubject[student.subject] = [];
     }
-    subjectGroups[studentAvail.subject].push(studentAvail);
+    studentsBySubject[student.subject].push(student);
   });
-  
-  // Process each subject group
-  for (const [subject, students] of Object.entries(subjectGroups)) {
-    if (students.length >= 4) { // Changed from 5 to 4
-      const timeSlots = findCommonTimeSlots(students, teacherAvailabilities);
-      
-      for (const slot of timeSlots) {
-        if (slot.students.length >= 4) { // Changed from 5 to 4
-          overlaps.push({
-            subject,
-            day: slot.day,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-            date: slot.date,
-            students: slot.students
-          });
-        }
-      }
-    }
-  }
-  
-  return overlaps;
-}
 
-// Function to find common time slots among students
-function findCommonTimeSlots(students, teacherAvailabilities) {
-  const commonSlots = [];
-  
-  // Get all possible time slots from students
-  const allSlots = [];
-  students.forEach(student => {
-    student.availability.forEach(slot => {
-      allSlots.push({
-        ...slot,
-        studentId: student.studentId,
-        availabilityId: student._id
-      });
-    });
-  });
-  
-  // Group slots by day
-  const dayGroups = {};
-  allSlots.forEach(slot => {
-    if (!dayGroups[slot.day]) {
-      dayGroups[slot.day] = [];
-    }
-    dayGroups[slot.day].push(slot);
-  });
-  
-  // Find overlapping time windows for each day
-  for (const [day, slots] of Object.entries(dayGroups)) {
-    const overlaps = findTimeOverlaps(slots, teacherAvailabilities, day);
-    commonSlots.push(...overlaps);
-  }
-  
-  return commonSlots;
-}
-
-// Function to find time overlaps for a specific day
-function findTimeOverlaps(slots, teacherAvailabilities, day) {
-  const overlaps = [];
-  
-  // Sort slots by start time
-  slots.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
-  
-  // Find overlapping windows
-  for (let i = 0; i < slots.length; i++) {
-    for (let j = i + 1; j < slots.length; j++) {
-      const slot1 = slots[i];
-      const slot2 = slots[j];
-      
-      const start1 = timeToMinutes(slot1.startTime);
-      const end1 = timeToMinutes(slot1.endTime);
-      const start2 = timeToMinutes(slot2.startTime);
-      const end2 = timeToMinutes(slot2.endTime);
-      
-      // Check if there's overlap
-      if (start1 < end2 && start2 < end1) {
-        const overlapStart = Math.max(start1, start2);
-        const overlapEnd = Math.min(end1, end2);
+  // For each subject group with at least 4 students
+  for (const [subject, students] of Object.entries(studentsBySubject)) {
+    if (students.length >= 4) {
+      try {
+        console.log(`\n=== Processing subject: ${subject} with ${students.length} students ===`);
         
-        // Convert back to time format
-        const overlapStartTime = `${Math.floor(overlapStart / 60).toString().padStart(2, '0')}:${(overlapStart % 60).toString().padStart(2, '0')}`;
-        const overlapEndTime = `${Math.floor(overlapEnd / 60).toString().padStart(2, '0')}:${(overlapEnd % 60).toString().padStart(2, '0')}`;
-        
-        // Check if teacher is available during this overlap
-        const teacherAvailable = teacherAvailabilities.some(teacherAvail =>
-          teacherAvail.availability.some(teacherSlot =>
-            teacherSlot.day.toLowerCase() === day.toLowerCase() &&
-            timeToMinutes(teacherSlot.startTime) <= overlapStart &&
-            timeToMinutes(teacherSlot.endTime) >= overlapEnd
-          )
-        );
-        
-        if (teacherAvailable && overlapEnd - overlapStart >= 60) { // At least 1 hour overlap
-          // Find all students available during this overlap
-          const availableStudents = slots.filter(slot => {
-            const slotStart = timeToMinutes(slot.startTime);
-            const slotEnd = timeToMinutes(slot.endTime);
-            return slotStart <= overlapStart && slotEnd >= overlapEnd;
+        // Log all student availabilities for debugging
+        students.forEach((student, index) => {
+          console.log(`Student ${index + 1} (${student.studentId}):`);
+          student.availability.forEach(slot => {
+            console.log(`  - ${slot.day} ${slot.startTime}-${slot.endTime}`);
           });
-          
-          if (availableStudents.length >= 4) { // Changed from 5 to 4
-            overlaps.push({
-              day,
-              startTime: overlapStartTime,
-              endTime: overlapEndTime,
-              date: slot1.date,
-              students: availableStudents.map(s => ({
-                studentId: s.studentId,
-                availabilityId: s.availabilityId
-              }))
-            });
+        });
+
+        // Log teacher availabilities
+        console.log('\nTeacher availabilities:');
+        teacherAvailabilities.forEach((teacher, index) => {
+          console.log(`Teacher ${index + 1} (${teacher.teacherId}):`);
+          teacher.availability.forEach(slot => {
+            console.log(`  - ${slot.day} ${slot.startTime}-${slot.endTime}`);
+          });
+        });
+
+        // Prepare context for AI with normalized days
+        const context = {
+          subject,
+          teacherAvailabilities: teacherAvailabilities.map(teacher => ({
+            teacherId: teacher.teacherId,
+            availability: teacher.availability.map(slot => ({
+              day: normalizeDayName(slot.day),
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+              date: slot.date
+            }))
+          })),
+          studentAvailabilities: students.map(student => ({
+            studentId: student.studentId,
+            availability: student.availability.map(slot => ({
+              day: normalizeDayName(slot.day),
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+              date: slot.date
+            }))
+          }))
+        };
+
+        // Get AI-suggested optimal sessions
+        const aiResponse = await getAISuggestedSessions(context);
+        console.log('\nAI Response:', JSON.stringify(aiResponse, null, 2));
+        
+        // Process AI suggestions
+        if (aiResponse.optimalSlots && aiResponse.optimalSlots.length > 0) {
+          for (const slot of aiResponse.optimalSlots) {
+            console.log(`\n--- Processing AI slot ---`);
+            console.log(`Day: ${slot.day} (normalized: ${normalizeDayName(slot.day)})`);
+            console.log(`Time: ${slot.startTime}-${slot.endTime}`);
+            console.log(`Student count: ${slot.studentCount}, Teacher ID: ${slot.teacherId}`);
+            
+            // Normalize the AI slot day
+            const normalizedSlot = {
+              ...slot,
+              day: normalizeDayName(slot.day)
+            };
+            
+            // Verify the slot meets our requirements
+            if (slot.studentCount >= 4 && slot.teacherId) {
+              // Find which students are actually available for this slot
+              const matchingStudents = students.filter(student => {
+                const hasMatch = student.availability.some(avail => {
+                  const normalizedAvail = {
+                    ...avail,
+                    day: normalizeDayName(avail.day)
+                  };
+                  const dayMatch = normalizedAvail.day === normalizedSlot.day;
+                  const timeOverlap = hasTimeOverlap(normalizedAvail, normalizedSlot);
+                  console.log(`  Student ${student.studentId}: day match: ${dayMatch}, time overlap: ${timeOverlap}`);
+                  console.log(`    Student slot: ${normalizedAvail.day} ${normalizedAvail.startTime}-${normalizedAvail.endTime}`);
+                  console.log(`    AI slot: ${normalizedSlot.day} ${normalizedSlot.startTime}-${normalizedSlot.endTime}`);
+                  return dayMatch && timeOverlap;
+                });
+                return hasMatch;
+              }).map(student => ({
+                studentId: student.studentId,
+                availabilityId: student._id
+              }));
+
+              console.log(`Found ${matchingStudents.length} matching students:`, matchingStudents);
+
+              if (matchingStudents.length >= 4) {
+                const session = {
+                  subject,
+                  day: normalizedSlot.day,
+                  startTime: normalizedSlot.startTime,
+                  endTime: normalizedSlot.endTime,
+                  date: normalizedSlot.date,
+                  students: matchingStudents,
+                  teacherId: slot.teacherId
+                };
+                console.log('✓ Adding viable session:', session);
+                viableSessions.push(session);
+              } else {
+                console.log(`✗ Not enough matching students: ${matchingStudents.length} < 4`);
+              }
+            } else {
+              console.log(`✗ Slot doesn't meet requirements: studentCount=${slot.studentCount}, teacherId=${slot.teacherId}`);
+            }
           }
+        } else {
+          console.log('No optimal slots found in AI response');
         }
+      } catch (error) {
+        console.error(`Error processing subject ${subject} with AI:`, error);
       }
     }
   }
   
-  return overlaps;
+  console.log('\n=== Final viable sessions ===');
+  viableSessions.forEach((session, index) => {
+    console.log(`${index + 1}. ${session.subject} - ${session.day} ${session.startTime}-${session.endTime} (${session.students.length} students)`);
+  });
+  
+  return viableSessions;
 }
+
+// Helper function to get AI suggestions
+async function getAISuggestedSessions(context) {
+  const prompt = `Analyze the following teaching/learning availability data to suggest optimal session times in JSON format:
+
+CONTEXT:
+${JSON.stringify(context, null, 2)}
+
+INSTRUCTIONS (respond in JSON format):
+1. Find time slots where at least 4 students are available
+2. Must overlap with teacher availability
+3. Prioritize slots with most student overlap
+4. Ideal duration: 1-2 hours
+5. Include teacher ID for each slot
+6. One slot per subject per day
+7. **IMPORTANT**: Use full day names in lowercase (monday, tuesday, wednesday, thursday, friday, saturday, sunday)
+
+Return a JSON object with optimalSlots array and analysis text. Example JSON response:
+{
+  "optimalSlots": [{
+    "day": "monday",
+    "startTime": "14:00",
+    "endTime": "16:00",
+    "date": "2025-07-20",
+    "studentCount": 4,
+    "teacherId": "teacher_123",
+    "durationMinutes": 90
+  }],
+  "analysis": "Found 3 optimal time slots..."
+}`;
+
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { 
+          role: 'system', 
+          content: 'You are an expert educational scheduler. Always respond with valid JSON.' 
+        },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.2,
+      response_format: { type: 'json_object' }
+    });
+
+    const result = JSON.parse(response.choices[0].message.content);
+    
+    // Validate the response structure
+    if (!result.optimalSlots || !Array.isArray(result.optimalSlots)) {
+      throw new Error('AI response missing required optimalSlots array');
+    }
+    
+    return result;
+  } catch (error) {
+    console.error('Error in AI scheduling:', error);
+    throw new Error('Failed to get AI scheduling suggestions');
+  }
+}
+
+function hasTimeOverlap(slot1, slot2) {
+  // Normalize both days for comparison
+  const day1 = normalizeDayName(slot1.day);
+  const day2 = normalizeDayName(slot2.day);
+  
+  // First check if days match (quick rejection)
+  if (day1 !== day2) {
+    console.log(`Day mismatch: ${day1} vs ${day2}`);
+    return false;
+  }
+
+  // Validate time formats
+  if (!slot1.startTime || !slot1.endTime || !slot2.startTime || !slot2.endTime) {
+    console.log('Invalid time format detected');
+    return false;
+  }
+
+  // Convert to minutes for comparison
+  const s1 = timeToMinutes(slot1.startTime);
+  const e1 = timeToMinutes(slot1.endTime);
+  const s2 = timeToMinutes(slot2.startTime);
+  const e2 = timeToMinutes(slot2.endTime);
+
+  // Check for valid time ranges
+  if (s1 >= e1 || s2 >= e2) {
+    console.log('Invalid time range detected');
+    return false;
+  }
+
+  // Final overlap check
+  const hasOverlap = s1 < e2 && e1 > s2;
+  console.log(`Time overlap check: ${slot1.startTime}-${slot1.endTime} vs ${slot2.startTime}-${slot2.endTime} = ${hasOverlap}`);
+  return hasOverlap;
+}
+
+
 
 // Function to store student availability
 async function storeStudentAvailability(studentId, subject, availability, preferences) {
@@ -416,14 +559,15 @@ async function storeTeacherAvailability(teacherId, availability) {
 async function createSessionsFromOverlaps(overlaps) {
   const createdSessions = [];
   
-  // Get teacher (assuming single teacher for now)
-  const teacher = await User.findOne({ role: 'teacher' });
-  if (!teacher) {
-    throw new Error('No teacher found');
-  }
-  
   for (const overlap of overlaps) {
     try {
+      // Get teacher (no longer assuming single teacher)
+      const teacher = await User.findById(overlap.teacherId);
+      if (!teacher) {
+        console.error(`Teacher not found for ID: ${overlap.teacherId}`);
+        continue;
+      }
+      
       // Create session
       const session = new Session({
         topic: overlap.subject,
@@ -436,7 +580,7 @@ async function createSessionsFromOverlaps(overlaps) {
           date: overlap.date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
           timezone: 'UTC'
         },
-        status: 'pending',
+        status: 'scheduled',
         preferences: {
           duration: calculateDuration(overlap.startTime, overlap.endTime),
           format: 'group',
@@ -475,11 +619,12 @@ async function checkAndCreateSessions(subject = null) {
     // Get all teacher availabilities
     const teacherAvailabilities = await TeacherAvailability.find({});
     
-    // Find overlapping time windows
-    const overlaps = findStudentOverlaps(studentAvailabilities, teacherAvailabilities);
+    // Find viable session combinations
+    const viableSessions = await findStudentOverlaps(studentAvailabilities, teacherAvailabilities);
+  
     
-    // Create sessions from overlaps
-    const createdSessions = await createSessionsFromOverlaps(overlaps);
+    // Create sessions from viable combinations
+    const createdSessions = await createSessionsFromOverlaps(viableSessions);
     
     return createdSessions;
   } catch (error) {
@@ -495,6 +640,8 @@ function calculateDuration(startTime, endTime) {
   const hours = Math.abs(end - start) / (1000 * 60 * 60);
   return `${hours} hours`;
 }
+
+
 
 // Function to store context in Pinecone
 async function storeContext(userId, message, analysis, sessionId = null) {
@@ -714,76 +861,3 @@ export async function POST(req) {
   }
 }
 
-// GET handler to check current status
-export async function GET(req) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const userId = searchParams.get('userId');
-    const subject = searchParams.get('subject');
-
-    if (!userId) {
-      return NextResponse.json({ error: 'Missing userId' }, { status: 400 });
-    }
-
-    const user = await User.findOne({ clerkId: userId });
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 });
-    }
-
-    if (user.role === 'student') {
-      let query = { studentId: user._id, status: 'pending' };
-      if (subject) {
-        query.subject = normalizeSubject(subject);
-      }
-
-      const availabilities = await StudentAvailability.find(query);
-      
-      const response = {
-        userRole: 'student',
-        availabilities,
-        totalActive: availabilities.length
-      };
-
-      // Subject-specific stats
-      if (subject) {
-        const normalizedSubject = normalizeSubject(subject);
-        const subjectStats = await StudentAvailability.aggregate([
-          { $match: { subject: normalizedSubject, status: 'pending' } },
-          { $group: { _id: null, count: { $sum: 1 } } }
-        ]);
-        response.subjectStats = {
-          subject: normalizedSubject,
-          studentsWaiting: subjectStats[0]?.count || 0,
-          needsMore: Math.max(0, 4 - (subjectStats[0]?.count || 0)) // Changed from 5 to 4
-        };
-      }
-
-      return NextResponse.json(response);
-
-    } else if (user.role === 'teacher') {
-      const availability = await TeacherAvailability.findOne({ teacherId: user._id });
-      
-      // Get sessions where this teacher is assigned
-      const sessions = await Session.find({ teacherId: user._id }).populate('studentIds', 'name');
-      
-      const response = {
-        userRole: 'teacher',
-        availability,
-        sessions: sessions.map(session => ({
-          id: session._id,
-          topic: session.topic,
-          schedule: session.schedule,
-          studentCount: session.studentIds.length,
-          status: session.status
-        })),
-        totalSessions: sessions.length
-      };
-
-      return NextResponse.json(response);
-    }
-
-  } catch (error) {
-    console.error('Error in GET handler:', error);
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
-  }
-}
