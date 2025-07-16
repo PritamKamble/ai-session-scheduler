@@ -10,7 +10,7 @@ import connectDB from '@/config/db';
 
 // Initialize OpenAI
 const openai = new OpenAI({
-  apiKey:process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY,
 });
 
 // Initialize Pinecone
@@ -119,6 +119,61 @@ function normalizeSubject(subject) {
   return normalized;
 }
 
+// Function to convert time string to minutes for comparison
+function timeToMinutes(timeStr) {
+  const [hours, minutes] = timeStr.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+// Function to check if student availability overlaps with ANY teacher availability
+function checkStudentTeacherOverlap(studentAvailability, teacherAvailabilities) {
+  const conflicts = [];
+  const validSlots = [];
+  
+  for (const studentSlot of studentAvailability) {
+    const studentStart = timeToMinutes(studentSlot.startTime);
+    const studentEnd = timeToMinutes(studentSlot.endTime);
+    
+    let hasOverlap = false;
+    
+    for (const teacherAvail of teacherAvailabilities) {
+      for (const teacherSlot of teacherAvail.availability) {
+        if (teacherSlot.day.toLowerCase() === studentSlot.day.toLowerCase()) {
+          const teacherStart = timeToMinutes(teacherSlot.startTime);
+          const teacherEnd = timeToMinutes(teacherSlot.endTime);
+          
+          // Check if there's any overlap
+          if (studentStart < teacherEnd && studentEnd > teacherStart) {
+            hasOverlap = true;
+            validSlots.push(studentSlot);
+            break;
+          }
+        }
+      }
+      if (hasOverlap) break;
+    }
+    
+    if (!hasOverlap) {
+      conflicts.push(studentSlot);
+    }
+  }
+  
+  return { conflicts, validSlots };
+}
+
+// Function to format teacher availability for display
+function formatTeacherAvailability(teacherAvailabilities) {
+  const formatted = [];
+  
+  for (const teacherAvail of teacherAvailabilities) {
+    for (const slot of teacherAvail.availability) {
+      formatted.push(`${slot.day} ${slot.startTime}-${slot.endTime}`);
+    }
+  }
+  
+  return formatted.join(', ');
+}
+
 // Function to process and normalize availability slots
 function processAvailabilitySlots(availability) {
   if (!availability || !Array.isArray(availability)) {
@@ -127,28 +182,159 @@ function processAvailabilitySlots(availability) {
 
   return availability.map(slot => {
     const processedSlot = {
-      day: slot.day,
+      day: slot.day.toLowerCase(),
       startTime: slot.startTime,
       endTime: slot.endTime
     };
 
     // Handle date field - if null/undefined, provide a default future date
     if (slot.date && slot.date !== null && slot.date !== undefined) {
-      // Validate date format (basic check)
       const dateObj = new Date(slot.date);
       if (!isNaN(dateObj.getTime())) {
         processedSlot.date = slot.date;
       } else {
-        // If invalid date, use next week as default
         processedSlot.date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
       }
     } else {
-      // If no date provided, use next week as default
       processedSlot.date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
     }
 
     return processedSlot;
   });
+}
+
+// Function to find overlapping time windows between students
+function findStudentOverlaps(studentAvailabilities, teacherAvailabilities) {
+  const overlaps = [];
+  
+  // Group students by subject
+  const subjectGroups = {};
+  studentAvailabilities.forEach(studentAvail => {
+    if (!subjectGroups[studentAvail.subject]) {
+      subjectGroups[studentAvail.subject] = [];
+    }
+    subjectGroups[studentAvail.subject].push(studentAvail);
+  });
+  
+  // Process each subject group
+  for (const [subject, students] of Object.entries(subjectGroups)) {
+    if (students.length >= 4) { // Changed from 5 to 4
+      const timeSlots = findCommonTimeSlots(students, teacherAvailabilities);
+      
+      for (const slot of timeSlots) {
+        if (slot.students.length >= 4) { // Changed from 5 to 4
+          overlaps.push({
+            subject,
+            day: slot.day,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            date: slot.date,
+            students: slot.students
+          });
+        }
+      }
+    }
+  }
+  
+  return overlaps;
+}
+
+// Function to find common time slots among students
+function findCommonTimeSlots(students, teacherAvailabilities) {
+  const commonSlots = [];
+  
+  // Get all possible time slots from students
+  const allSlots = [];
+  students.forEach(student => {
+    student.availability.forEach(slot => {
+      allSlots.push({
+        ...slot,
+        studentId: student.studentId,
+        availabilityId: student._id
+      });
+    });
+  });
+  
+  // Group slots by day
+  const dayGroups = {};
+  allSlots.forEach(slot => {
+    if (!dayGroups[slot.day]) {
+      dayGroups[slot.day] = [];
+    }
+    dayGroups[slot.day].push(slot);
+  });
+  
+  // Find overlapping time windows for each day
+  for (const [day, slots] of Object.entries(dayGroups)) {
+    const overlaps = findTimeOverlaps(slots, teacherAvailabilities, day);
+    commonSlots.push(...overlaps);
+  }
+  
+  return commonSlots;
+}
+
+// Function to find time overlaps for a specific day
+function findTimeOverlaps(slots, teacherAvailabilities, day) {
+  const overlaps = [];
+  
+  // Sort slots by start time
+  slots.sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+  
+  // Find overlapping windows
+  for (let i = 0; i < slots.length; i++) {
+    for (let j = i + 1; j < slots.length; j++) {
+      const slot1 = slots[i];
+      const slot2 = slots[j];
+      
+      const start1 = timeToMinutes(slot1.startTime);
+      const end1 = timeToMinutes(slot1.endTime);
+      const start2 = timeToMinutes(slot2.startTime);
+      const end2 = timeToMinutes(slot2.endTime);
+      
+      // Check if there's overlap
+      if (start1 < end2 && start2 < end1) {
+        const overlapStart = Math.max(start1, start2);
+        const overlapEnd = Math.min(end1, end2);
+        
+        // Convert back to time format
+        const overlapStartTime = `${Math.floor(overlapStart / 60).toString().padStart(2, '0')}:${(overlapStart % 60).toString().padStart(2, '0')}`;
+        const overlapEndTime = `${Math.floor(overlapEnd / 60).toString().padStart(2, '0')}:${(overlapEnd % 60).toString().padStart(2, '0')}`;
+        
+        // Check if teacher is available during this overlap
+        const teacherAvailable = teacherAvailabilities.some(teacherAvail =>
+          teacherAvail.availability.some(teacherSlot =>
+            teacherSlot.day.toLowerCase() === day.toLowerCase() &&
+            timeToMinutes(teacherSlot.startTime) <= overlapStart &&
+            timeToMinutes(teacherSlot.endTime) >= overlapEnd
+          )
+        );
+        
+        if (teacherAvailable && overlapEnd - overlapStart >= 60) { // At least 1 hour overlap
+          // Find all students available during this overlap
+          const availableStudents = slots.filter(slot => {
+            const slotStart = timeToMinutes(slot.startTime);
+            const slotEnd = timeToMinutes(slot.endTime);
+            return slotStart <= overlapStart && slotEnd >= overlapEnd;
+          });
+          
+          if (availableStudents.length >= 4) { // Changed from 5 to 4
+            overlaps.push({
+              day,
+              startTime: overlapStartTime,
+              endTime: overlapEndTime,
+              date: slot1.date,
+              students: availableStudents.map(s => ({
+                studentId: s.studentId,
+                availabilityId: s.availabilityId
+              }))
+            });
+          }
+        }
+      }
+    }
+  }
+  
+  return overlaps;
 }
 
 // Function to store student availability
@@ -177,7 +363,7 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
       existingAvailability.availability = validatedAvailability;
       existingAvailability.preferences = preferences || {};
       existingAvailability.createdAt = new Date();
-      existingAvailability.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+      existingAvailability.expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       await existingAvailability.save();
       return existingAvailability;
     } else {
@@ -193,12 +379,6 @@ async function storeStudentAvailability(studentId, subject, availability, prefer
     }
   } catch (error) {
     console.error('Error storing student availability:', error);
-    console.error('Data being saved:', {
-      studentId,
-      subject: normalizeSubject(subject),
-      availability: processAvailabilitySlots(availability),
-      preferences
-    });
     throw error;
   }
 }
@@ -232,54 +412,6 @@ async function storeTeacherAvailability(teacherId, availability) {
   }
 }
 
-// Function to find overlapping time windows
-function findOverlappingTimeWindows(studentAvailabilities, teacherAvailabilities) {
-  const overlaps = [];
-  
-  // Group students by time windows
-  const timeWindowGroups = {};
-  
-  studentAvailabilities.forEach(studentAvail => {
-    studentAvail.availability.forEach(slot => {
-      const key = `${slot.day}_${slot.startTime}_${slot.endTime}`;
-      if (!timeWindowGroups[key]) {
-        timeWindowGroups[key] = {
-          day: slot.day,
-          startTime: slot.startTime,
-          endTime: slot.endTime,
-          date: slot.date,
-          students: [],
-          subject: studentAvail.subject
-        };
-      }
-      timeWindowGroups[key].students.push({
-        studentId: studentAvail.studentId,
-        availabilityId: studentAvail._id
-      });
-    });
-  });
-  
-  // Check which time windows have teacher availability and enough students
-  Object.values(timeWindowGroups).forEach(window => {
-    if (window.students.length >= 5) {
-      // Check if any teacher is available at this time
-      const teacherAvailable = teacherAvailabilities.some(teacherAvail =>
-        teacherAvail.availability.some(slot =>
-          slot.day === window.day &&
-          slot.startTime <= window.startTime &&
-          slot.endTime >= window.endTime
-        )
-      );
-      
-      if (teacherAvailable) {
-        overlaps.push(window);
-      }
-    }
-  });
-  
-  return overlaps;
-}
-
 // Function to create sessions from overlapping windows
 async function createSessionsFromOverlaps(overlaps) {
   const createdSessions = [];
@@ -301,7 +433,7 @@ async function createSessionsFromOverlaps(overlaps) {
           day: overlap.day,
           startTime: overlap.startTime,
           endTime: overlap.endTime,
-          date: overlap.date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // Default to next week
+          date: overlap.date || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
           timezone: 'UTC'
         },
         status: 'pending',
@@ -344,7 +476,7 @@ async function checkAndCreateSessions(subject = null) {
     const teacherAvailabilities = await TeacherAvailability.find({});
     
     // Find overlapping time windows
-    const overlaps = findOverlappingTimeWindows(studentAvailabilities, teacherAvailabilities);
+    const overlaps = findStudentOverlaps(studentAvailabilities, teacherAvailabilities);
     
     // Create sessions from overlaps
     const createdSessions = await createSessionsFromOverlaps(overlaps);
@@ -387,7 +519,7 @@ async function storeContext(userId, message, analysis, sessionId = null) {
     });
     await context.save();
 
-    // Store in Pinecone - handle null/undefined subject for teachers
+    // Store in Pinecone
     const contextId = `context_${context._id}`;
     const pineconeMetadata = {
       userId: userId.toString(),
@@ -395,12 +527,10 @@ async function storeContext(userId, message, analysis, sessionId = null) {
       timestamp: new Date().toISOString()
     };
 
-    // Only add subject if it exists (for students)
     if (analysis.subject) {
       pineconeMetadata.subject = analysis.subject;
     }
 
-    // Only add sessionId if it exists
     if (sessionId) {
       pineconeMetadata.sessionId = sessionId.toString();
     }
@@ -452,11 +582,42 @@ export async function POST(req) {
           });
         }
 
-        // Store student availability
+        // Get teacher availabilities to check conflicts
+        const teacherAvailabilities = await TeacherAvailability.find({});
+        
+        if (teacherAvailabilities.length === 0) {
+          return NextResponse.json({
+            message: "No teachers are currently available. Please contact admin for more information.",
+            analysis
+          });
+        }
+
+        // Check for conflicts with teacher availability
+        const { conflicts, validSlots } = checkStudentTeacherOverlap(analysis.availability, teacherAvailabilities);
+        
+        if (conflicts.length > 0 && validSlots.length === 0) {
+          // All student slots conflict with teacher availability
+          const teacherSchedule = formatTeacherAvailability(teacherAvailabilities);
+          return NextResponse.json({
+            message: `Please be available during teacher's schedule: ${teacherSchedule}`,
+            analysis,
+            teacherAvailability: teacherSchedule,
+            conflicts: conflicts
+          });
+        }
+        
+        if (conflicts.length > 0) {
+          // Some slots conflict, warn user but proceed with valid slots
+          const teacherSchedule = formatTeacherAvailability(teacherAvailabilities);
+          analysis.availability = validSlots; // Only use valid slots
+          // Add warning message about conflicts
+        }
+
+        // Store student availability (only valid slots)
         const availability = await storeStudentAvailability(
           user._id,
           analysis.subject,
-          analysis.availability,
+          validSlots.length > 0 ? validSlots : analysis.availability,
           analysis.preferences
         );
 
@@ -470,8 +631,14 @@ export async function POST(req) {
           sessionsCreated: createdSessions.length
         };
 
+        // Add conflict warning if applicable
+        if (conflicts.length > 0) {
+          const teacherSchedule = formatTeacherAvailability(teacherAvailabilities);
+          response.message += ` Note: Some of your requested times don't match teacher availability (${teacherSchedule}).`;
+        }
+
         if (createdSessions.length > 0) {
-          response.message += ` Excellent! I created ${createdSessions.length} session(s) with enough students and teacher availability.`;
+          response.message += ` Excellent! I created ${createdSessions.length} session(s) with enough students and overlapping availability.`;
           response.sessions = createdSessions.map(session => ({
             id: session._id,
             topic: session.topic,
@@ -484,7 +651,7 @@ export async function POST(req) {
             subject: normalizeSubject(analysis.subject),
             status: 'pending'
           });
-          response.message += ` Currently ${currentStudents} students are interested in ${analysis.subject}. We need 5+ students with matching availability to create a session.`;
+          response.message += ` Currently ${currentStudents} students are interested in ${analysis.subject}. We need 4+ students with overlapping availability to create a session.`;
         }
 
         return NextResponse.json(response);
@@ -504,7 +671,7 @@ export async function POST(req) {
         };
 
         if (createdSessions.length > 0) {
-          response.message += ` Perfect! I created ${createdSessions.length} session(s) where your availability matches with student groups.`;
+          response.message += ` Perfect! I created ${createdSessions.length} session(s) where your availability overlaps with student groups.`;
           response.sessions = createdSessions.map(session => ({
             id: session._id,
             topic: session.topic,
@@ -512,7 +679,7 @@ export async function POST(req) {
             studentCount: session.studentIds.length
           }));
         } else {
-          response.message += " I'm monitoring for student groups that match your availability.";
+          response.message += " I'm monitoring for student groups that overlap with your availability.";
         }
 
         return NextResponse.json(response);
@@ -587,7 +754,7 @@ export async function GET(req) {
         response.subjectStats = {
           subject: normalizedSubject,
           studentsWaiting: subjectStats[0]?.count || 0,
-          needsMore: Math.max(0, 5 - (subjectStats[0]?.count || 0))
+          needsMore: Math.max(0, 4 - (subjectStats[0]?.count || 0)) // Changed from 5 to 4
         };
       }
 
