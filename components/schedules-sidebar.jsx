@@ -21,7 +21,7 @@ import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
-import { useUser } from "@clerk/nextjs"
+import { SignedIn, SignedOut, SignInButton, UserButton, useUser } from "@clerk/nextjs"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 import {
@@ -333,9 +333,7 @@ export function SchedulesSidebar({ side = "left", ...props }) {
     <Sidebar side={side} className="border-r w-80 lg:w-96" {...props}>
       <SidebarHeader className="p-6">
         <div className="flex items-center gap-4 mb-6">
-          <div className="p-3 bg-primary rounded-xl">
-            <Calendar className="w-5 h-5 text-primary-foreground" />
-          </div>
+          
           <div>
             <h2 className="text-xl font-semibold text-foreground">
               {user?.publicMetadata?.role === "teacher" ? "My Sessions" : "My Learning"}
@@ -343,7 +341,20 @@ export function SchedulesSidebar({ side = "left", ...props }) {
             <p className="text-sm text-muted-foreground ">
               {user?.publicMetadata?.role === "teacher" ? "Teaching schedule" : "Enrolled sessions"}
             </p>
-
+                              <div className="ml-32 -my-10">
+                                <SignedOut>
+                                <SignInButton mode="modal">
+                                  <Button variant="outline" className="w-full" onClick={() => setIsOpen(false)}>
+                                    Sign In
+                                  </Button>
+                                </SignInButton>
+                              </SignedOut>
+                              <SignedIn>
+                                <div className="flex justify-center">
+                                  <UserButton afterSignOutUrl="/" />
+                                </div>
+                              </SignedIn>
+                              </div>
           </div>
         </div>
 
