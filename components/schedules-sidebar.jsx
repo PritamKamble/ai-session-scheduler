@@ -5,8 +5,6 @@ import {
   Calendar,
   Clock,
   Users,
-  Filter,
-  Search,
   Plus,
   MoreHorizontal,
   Eye,
@@ -15,11 +13,9 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Link as LinkIcon,
+  LinkIcon,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Card } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -36,11 +32,10 @@ import {
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
-  SidebarSeparator,
 } from "@/components/ui/sidebar"
 import Link from "next/link"
 
-export function SchedulesSidebar() {
+export function SchedulesSidebar({ side = "left", ...props }) {
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState("all")
@@ -85,17 +80,13 @@ export function SchedulesSidebar() {
       const params = new URLSearchParams()
 
       params.append("userId", user.id)
-      const teacherEmails = [
-    "7276279026.pk@gmail.com",
-    "arjun6mahato@gmail.com", 
-    "akshayynazare@gmail.com"
-];
+      const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com", "akshayynazare@gmail.com"]
 
-if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
-    params.append("userRole", "teacher");
-} else {
-    params.append("userRole", "student");
-}
+      if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
+        params.append("userRole", "teacher")
+      } else {
+        params.append("userRole", "student")
+      }
       params.append("page", currentPage.toString())
       params.append("limit", limit.toString())
 
@@ -144,9 +135,9 @@ if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
       }
 
       // Add hardcoded meeting link to each session
-      const sessionsWithMeetingLink = data.data.map(session => ({
+      const sessionsWithMeetingLink = data.data.map((session) => ({
         ...session,
-        meetingLink: "https://meet.google.com/qyt-dpvs-sds"
+        meetingLink: "https://meet.google.com/qyt-dpvs-sds",
       }))
 
       setSessions(sessionsWithMeetingLink || [])
@@ -271,26 +262,10 @@ if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
     return `${session.schedule.startTime || ""} - ${session.schedule.endTime || ""}`
   }
 
-  const handleSearch = (e) => {
-    e.preventDefault()
-    setCurrentPage(1)
-    fetchSessions()
-  }
-
   const handlePageChange = (newPage) => {
     if (newPage >= 1 && newPage <= stats.totalPages) {
       setCurrentPage(newPage)
     }
-  }
-
-  const handleFilterChange = (newFilter) => {
-    setFilter(newFilter)
-    setCurrentPage(1)
-  }
-
-  const handleDateChange = (newDate) => {
-    setSelectedDate(newDate)
-    setCurrentPage(1)
   }
 
   const renderEnrolledStudents = (session) => {
@@ -355,7 +330,7 @@ if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
   }
 
   return (
-    <Sidebar className="border-r w-80 lg:w-96">
+    <Sidebar side={side} className="border-r w-80 lg:w-96" {...props}>
       <SidebarHeader className="p-6">
         <div className="flex items-center gap-4 mb-6">
           <div className="p-3 bg-primary rounded-xl">
@@ -368,9 +343,7 @@ if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
             <p className="text-sm text-muted-foreground ">
               {user?.publicMetadata?.role === "teacher" ? "Teaching schedule" : "Enrolled sessions"}
             </p>
-            <Link href="/">
-            <h1 className="text-zinc-600 hover:text-green-800 tracking-tighter">Back to home</h1>
-            </Link>
+
           </div>
         </div>
 
@@ -401,112 +374,8 @@ if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
                 </div>
               </Card>
             </div>
-
-            {/* Additional stats for desktop */}
-            <div className="grid grid-cols-4 gap-2 mb-4">
-              <div className="text-center p-2 bg-muted/30 rounded-lg">
-                <div className="text-lg font-semibold text-amber-600">{stats.pending}</div>
-                <div className="text-xs text-muted-foreground">Pending</div>
-              </div>
-              <div className="text-center p-2 bg-muted/30 rounded-lg">
-                <div className="text-lg font-semibold text-blue-600">{stats.scheduled}</div>
-                <div className="text-xs text-muted-foreground">Scheduled</div>
-              </div>
-              <div className="text-center p-2 bg-muted/30 rounded-lg">
-                <div className="text-lg font-semibold text-green-600">{stats.completed}</div>
-                <div className="text-xs text-muted-foreground">Completed</div>
-              </div>
-              <div className="text-center p-2 bg-muted/30 rounded-lg">
-                <div className="text-lg font-semibold text-red-600">{stats.cancelled}</div>
-                <div className="text-xs text-muted-foreground">Cancelled</div>
-              </div>
-            </div>
           </SidebarGroupContent>
         </SidebarGroup>
-
-        <SidebarSeparator />
-
-        {/* Filters */}
-        <SidebarGroup>
-          <SidebarGroupLabel className="text-base font-medium">Filters & Search</SidebarGroupLabel>
-          <SidebarGroupContent className="space-y-4">
-            <form onSubmit={handleSearch} className="space-y-3">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <Input
-                  type="text"
-                  placeholder="Search sessions by topic..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-10 h-10"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <Select value={filter} onValueChange={handleFilterChange}>
-                  <SelectTrigger className="h-10">
-                    <Filter className="w-4 h-4 mr-2" />
-                    <SelectValue placeholder="Status" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">All Status</SelectItem>
-                    <SelectItem value="pending">Pending</SelectItem>
-                    <SelectItem value="scheduled">Scheduled</SelectItem>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="cancelled">Cancelled</SelectItem>
-                  </SelectContent>
-                </Select>
-
-                <Input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => handleDateChange(e.target.value)}
-                  className="h-10"
-                />
-              </div>
-
-              <Button type="submit" variant="outline" className="w-full h-10 bg-transparent">
-                Apply Filters
-              </Button>
-            </form>
-
-            {/* Advanced Options */}
-            <div className="space-y-3 pt-2 border-t">
-              <div className="text-sm font-medium text-foreground">Advanced Options</div>
-              {user?.publicMetadata?.role === "teacher" && (
-                <div className="flex items-center space-x-3">
-                  <input
-                    type="checkbox"
-                    id="includeAvailability"
-                    checked={includeAvailability}
-                    onChange={(e) => setIncludeAvailability(e.target.checked)}
-                    className="w-4 h-4"
-                  />
-                  <label htmlFor="includeAvailability" className="text-sm text-muted-foreground">
-                    Include availability slots
-                  </label>
-                </div>
-              )}
-
-              {user?.publicMetadata?.role === "student" && (
-                <div className="flex items-center space-x-3">
-                  <input
-                    type="checkbox"
-                    id="useVectorSearch"
-                    checked={useVectorSearch}
-                    onChange={(e) => setUseVectorSearch(e.target.checked)}
-                    className="w-4 h-4"
-                  />
-                  <label htmlFor="useVectorSearch" className="text-sm text-muted-foreground">
-                    Enable AI recommendations
-                  </label>
-                </div>
-              )}
-            </div>
-          </SidebarGroupContent>
-        </SidebarGroup>
-
-        <SidebarSeparator />
 
         {/* Sessions List */}
         <SidebarGroup>
@@ -616,9 +485,9 @@ if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
                         {session.meetingLink && (
                           <div className="flex items-center gap-3 text-sm text-foreground">
                             <LinkIcon className="w-4 h-4 text-primary" />
-                            <a 
-                              href={session.meetingLink} 
-                              target="_blank" 
+                            <a
+                              href={session.meetingLink}
+                              target="_blank"
                               rel="noopener noreferrer"
                               className="text-blue-600 hover:underline"
                               onClick={(e) => e.stopPropagation()}

@@ -77,7 +77,6 @@ const DashboardPage = () => {
           // Determine role based on email
           const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com", "akshayynazare@gmail.com"]
           const userRole = teacherEmails.includes(user.primaryEmailAddress?.emailAddress) ? "teacher" : "student"
-
           setRole(userRole)
 
           const response = await fetch("/api/sync-user", {
@@ -107,14 +106,12 @@ const DashboardPage = () => {
 
           const data = await response.json()
           console.log("User synced:", data)
-
           toast.success("Profile synced successfully!")
         } catch (error) {
           console.error("Sync failed:", error)
           toast.error("Failed to sync user data")
         }
-      }
-      else if (isLoaded && !isSignedIn) {
+      } else if (isLoaded && !isSignedIn) {
         // Redirect to sign-in page if not signed in
         toast.error("You must be signed in to access the dashboard")
         router.push("/")
@@ -129,6 +126,7 @@ const DashboardPage = () => {
     if (!userInput.trim() || isProcessing) return
 
     setIsProcessing(true)
+
     try {
       // Add user message to conversation
       const userMessage = {
@@ -136,6 +134,7 @@ const DashboardPage = () => {
         role: "user",
         timestamp: new Date().toISOString(),
       }
+
       setConversation((prev) => [...prev, userMessage])
 
       // Show loading toast
@@ -167,16 +166,17 @@ const DashboardPage = () => {
         sessions: data.sessions || [],
         analysis: data.analysis || null,
       }
-      setConversation((prev) => [...prev, systemMessage])
 
+      setConversation((prev) => [...prev, systemMessage])
       setUserInput("")
 
       // Update toast to success
-      toast.success(data.message.includes("created") ? 
-        "Session created successfully!" : 
-        "Availability recorded successfully!", {
-        id: loadingToast,
-      })
+      toast.success(
+        data.message.includes("created") ? "Session created successfully!" : "Availability recorded successfully!",
+        {
+          id: loadingToast,
+        },
+      )
 
       // Scroll to bottom of conversation
       setTimeout(() => {
@@ -220,7 +220,6 @@ const DashboardPage = () => {
         }}
       />
       <SidebarProvider>
-        <SchedulesSidebar />
         <SidebarInset>
           {/* Header */}
           <header className="sticky top-0 flex h-16 shrink-0 items-center gap-2 border-b bg-background/95 backdrop-blur px-4">
@@ -276,12 +275,11 @@ const DashboardPage = () => {
                           {msg.sessions.map((session, i) => (
                             <div key={i} className="p-3 border rounded-lg bg-background">
                               <h3 className="font-medium">{session.topic}</h3>
-                              <p className="text-sm text-muted-foreground">
-                                {session.studentCount} students
-                              </p>
+                              <p className="text-sm text-muted-foreground">{session.studentCount} students</p>
                               <p className="text-sm mt-1">
-                                {session.schedule.day}{session.schedule.date && `, ${session.schedule.date}`} • 
-                                {session.schedule.startTime}-{session.schedule.endTime}
+                                {session.schedule.day}
+                                {session.schedule.date && `, ${session.schedule.date}`} •{session.schedule.startTime}-
+                                {session.schedule.endTime}
                               </p>
                             </div>
                           ))}
@@ -292,7 +290,10 @@ const DashboardPage = () => {
                       <div className="mt-2 text-sm text-muted-foreground">
                         <p>Detected subject: {msg.analysis.subject}</p>
                         {msg.analysis.availability?.length > 0 && (
-                          <p>Available: {msg.analysis.availability.map(a => `${a.day} ${a.startTime}-${a.endTime}`).join(", ")}</p>
+                          <p>
+                            Available:{" "}
+                            {msg.analysis.availability.map((a) => `${a.day} ${a.startTime}-${a.endTime}`).join(", ")}
+                          </p>
                         )}
                       </div>
                     )}
@@ -314,8 +315,8 @@ const DashboardPage = () => {
                     <div className="absolute -inset-0.5 bg-gradient-to-r from-primary/30 to-primary/30 rounded-xl blur opacity-75 group-hover:opacity-100 transition duration-1000"></div>
                     <form onSubmit={handleSubmit} className="relative">
                       <Input
-                        className="pr-20 py-6 text-base rounded-xl backdrop-blur-md border-2 focus-visible:ring-0 focus-visible:ring-offset-0 
-                                                dark:bg-background/20 dark:border-white/5 dark:text-white
+                        className="pr-20 py-6 text-base rounded-xl backdrop-blur-md border-2 focus-visible:ring-0 focus-visible:ring-offset-0
+                                                 dark:bg-background/20 dark:border-white/5 dark:text-white
                                                 bg-white/80 border-primary/10 text-gray-800 shadow-[0_4px_20px_rgba(36,101,237,0.2)]"
                         placeholder={
                           role === "teacher"
@@ -330,8 +331,8 @@ const DashboardPage = () => {
                       <Button
                         type="submit"
                         size="icon"
-                        className="absolute right-2 top-1/2 transform -translate-y-1/2 h-10 w-10 
-                                                bg-primary/90 hover:bg-primary backdrop-blur-md shadow-md"
+                        className="absolute right-2 top-1/2 transform -translate-y-1/2 h-10 w-10
+                                                 bg-primary/90 hover:bg-primary backdrop-blur-md shadow-md"
                         aria-label="Send message"
                         disabled={!userInput.trim() || isProcessing}
                       >
@@ -349,6 +350,7 @@ const DashboardPage = () => {
             </div>
           </div>
         </SidebarInset>
+        <SchedulesSidebar side="right" />
       </SidebarProvider>
     </>
   )

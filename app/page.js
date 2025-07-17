@@ -7,6 +7,7 @@ import Navbar from "@/components/navbar";
 import StructuredData from "@/components/structured-data";
 import TypingPromptInput from "@/components/typing-prompt-input";
 import { Button } from "@/components/ui/button";
+import { redirect } from 'next/navigation';
 
 export default function Home() {
   const { isSignedIn, isLoaded } = useAuth();
@@ -21,6 +22,13 @@ export default function Home() {
         </div>
       </div>
     );
+  }
+  if(isSignedIn){
+    // Redirect to dashboard if already signed in
+    if (typeof window !== 'undefined') {
+      redirect('/dashboard');
+    }
+    return null; // Prevent rendering anything else
   }
 
   return (
