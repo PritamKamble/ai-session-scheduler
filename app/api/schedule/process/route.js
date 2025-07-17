@@ -21,10 +21,8 @@ const pinecone = new Pinecone({
 const indexName = process.env.PINECONE_INDEX_NAME || 'conversations';
 const index = pinecone.index(indexName);
 
-// Connect to MongoDB
 await connectDB();
 
-// GPT-4o analysis prompt for availability extraction
 const AVAILABILITY_ANALYSIS_PROMPT = `
 You are an AI assistant that analyzes messages to extract availability information.
 
@@ -447,7 +445,7 @@ async function handleStudentAvailability(user, analysis) {
     console.log(`📊 Total students waiting for ${analysis.subject}: ${totalWaitingStudents}`);
 
     // Only try to create new sessions if we have enough students
-    if (totalWaitingStudents >= 2) {
+    if (totalWaitingStudents >= 3) {
       console.log(`✅ Sufficient students (${totalWaitingStudents}) for new session creation`);
       const createdSessions = await checkAndCreateSessions(analysis.subject);
       
@@ -827,7 +825,7 @@ Only return valid JSON, no explanations.
     // FIXED: Remove the filter that was limiting to 4+ students
     // Now we'll create sessions with any number of students (2+)
     const validSessions = viableSessions.filter(session => 
-      session.students && session.students.length >= 2 // Minimum 2 for a group session
+      session.students && session.students.length >= 3 // Minimum 2 for a group session
     );
     
     console.log(`✓ AI found ${validSessions.length} viable NEW sessions with all available students`);
@@ -933,7 +931,7 @@ async function processRemainingStudents() {
         status: 'pending'
       });
       
-      if (stillPendingStudents.length >= 2) {
+      if (stillPendingStudents.length >= 3) {
         console.log(`🆕 Creating new sessions for ${stillPendingStudents.length} remaining students in ${subject}`);
         const createdSessions = await checkAndCreateSessions(subject);
         totalNewSessions += createdSessions.length;
