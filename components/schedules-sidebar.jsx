@@ -80,7 +80,7 @@ export function SchedulesSidebar({ side = "left", ...props }) {
       const params = new URLSearchParams()
 
       params.append("userId", user.id)
-      const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com", "akshayynazare@gmail.com"]
+      const teacherEmails = ["7276279026.pk@gmail.com", "arjun6mahato@gmail.com", "akshayynazare@gmail.com","patiljayesh95666@gmail.com"]
 
       if (teacherEmails.includes(user.primaryEmailAddress?.emailAddress)) {
         params.append("userRole", "teacher")
