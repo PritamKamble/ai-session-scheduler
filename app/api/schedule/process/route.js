@@ -89,6 +89,42 @@ async function analyzeAvailabilityMessage(message, userRole) {
   }
 }
 
+function getNextDateForDay(dayName) {
+  const dayMap = {
+    'sunday': 0,
+    'monday': 1,
+    'tuesday': 2,
+    'wednesday': 3,
+    'thursday': 4,
+    'friday': 5,
+    'saturday': 6
+  };
+  
+  const today = new Date();
+  const targetDay = dayMap[dayName.toLowerCase()];
+  
+  if (targetDay === undefined) {
+    // If invalid day, default to next week same day
+    const nextWeek = new Date(today);
+    nextWeek.setDate(today.getDate() + 7);
+    return nextWeek.toISOString().split('T')[0];
+  }
+  
+  const currentDay = today.getDay();
+  let daysUntilTarget = targetDay - currentDay;
+  
+  // If the target day is today or has passed this week, get next week's occurrence
+  if (daysUntilTarget <= 0) {
+    daysUntilTarget += 7;
+  }
+  
+  const targetDate = new Date(today);
+  targetDate.setDate(today.getDate() + daysUntilTarget);
+  
+  return targetDate.toISOString().split('T')[0];
+}
+
+
 // Function to normalize subject for better matching
 function normalizeSubject(subject) {
   if (!subject) return null;
@@ -521,12 +557,14 @@ function processAvailabilitySlots(availability) {
       continue;
     }
 
+    const normalizedDay = normalizeDayName(slot.day);
+    
     const processedSlot = {
-      day: normalizeDayName(slot.day),
+      day: normalizedDay,
       startTime: slot.startTime,
       endTime: slot.endTime,
-      date: slot.date && slot.date !== 'undefined' ? slot.date : 
-             new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+      // FIXED: Calculate the correct date for the specified day
+      date: slot.date && slot.date !== 'undefined' ? slot.date : getNextDateForDay(normalizedDay)
     };
 
     validSlots.push(processedSlot);
