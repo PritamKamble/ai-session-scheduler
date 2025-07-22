@@ -5,7 +5,6 @@ import connectDB from '@/config/db';
 export async function POST(req) {
     try {
         await connectDB();
-        console.log(process.env.OPENAI_API_KEY, process.env.PINECONE_API_KEY);
         const { clerkId, userName, email, firstName, lastName, profileImage, role, metadata } = await req.json();
 
         if (!clerkId) {
