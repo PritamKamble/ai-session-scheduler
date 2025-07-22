@@ -350,9 +350,19 @@ export function SchedulesSidebar({ side = "left", ...props }) {
                                 </SignInButton>
                               </SignedOut>
                               <SignedIn>
-                                <div className="flex justify-center">
-                                  <UserButton afterSignOutUrl="/" />
-                                </div>
+                                <div className="flex justify-center" style={{ touchAction: 'manipulation' }}>
+  <UserButton 
+    afterSignOutUrl="/" 
+    appearance={{
+      elements: {
+        userButtonAvatarBox: {
+          width: '40px',
+          height: '40px'
+        }
+      }
+    }}
+  />
+</div>
                               </SignedIn>
                               </div>
           </div>

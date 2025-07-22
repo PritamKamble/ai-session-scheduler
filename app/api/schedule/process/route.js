@@ -65,6 +65,115 @@ Examples:
 - Student: "I want to learn React hooks on weekends" → subject "react" + weekend availability
 `;
 
+async function findOptimalTiming(availabilities, teacherAvailabilities, subject) {
+  const prompt = `
+You are a smart scheduling assistant. Find the OPTIMAL time slot that accommodates the MAXIMUM number of participants.
+
+IMPORTANT RULES:
+- Find the time slot where MOST students can attend
+- All participants (students + at least one teacher) must be available at the chosen time
+- Return the time slot that maximizes student overlap
+- If multiple slots have same student count, prefer the one with more total available hours
+
+STUDENT AVAILABILITIES:
+${JSON.stringify(availabilities, null, 2)}
+
+TEACHER AVAILABILITIES:
+${JSON.stringify(teacherAvailabilities, null, 2)}
+
+SUBJECT: ${subject}
+
+REQUIRED OUTPUT FORMAT:
+Return JSON in this exact format:
+{
+  "optimalSlot": {
+    "day": "day_name",
+    "startTime": "HH:MM",
+    "endTime": "HH:MM",
+    "date": "YYYY-MM-DD"
+  },
+  "availableStudents": [
+    {
+      "studentId": "id",
+      "availabilityId": "availability_id"
+    }
+  ],
+  "teacherId": "teacher_id",
+  "totalStudentsAvailable": number
+}
+
+Only return valid JSON, no explanations.
+`;
+
+  try {
+    const response = await callAIService(prompt, openai);
+    return JSON.parse(response);
+  } catch (error) {
+    console.error('❌ Error finding optimal timing:', error);
+    return null;
+  }
+}
+
+async function createImmediateSession(studentId, subject, availability, availabilityId) {
+  try {
+    console.log(`🚀 Creating immediate session for first student: ${studentId}`);
+    
+    // Use student's first available slot as initial session time
+    const initialSlot = availability[0];
+    
+    // Find available teachers for this specific time slot
+    const availableTeachers = await findAvailableTeacherForTimeSlot(
+      initialSlot.day,
+      initialSlot.startTime,
+      initialSlot.endTime,
+      subject
+    );
+    
+    if (availableTeachers.length === 0) {
+      throw new Error(`No teachers available for ${subject} at ${initialSlot.day} ${initialSlot.startTime}-${initialSlot.endTime}. Please try a different time slot.`);
+    }
+
+    // Use the first available teacher
+    const selectedTeacher = availableTeachers[0];
+
+    // Create session with conflict-free timing
+    const session = new Session({
+      topic: normalizeSubject(subject),
+      teacherId: selectedTeacher.teacherId,
+      studentIds: [studentId],
+      schedule: {
+        day: initialSlot.day,
+        startTime: initialSlot.startTime,
+        endTime: initialSlot.endTime,
+        date: initialSlot.date || getNextDateForDay(initialSlot.day),
+        timezone: 'UTC'
+      },
+      status: 'scheduled',
+      preferences: {
+        duration: calculateDuration(initialSlot.startTime, initialSlot.endTime),
+        format: 'individual',
+        level: 'mixed'
+      }
+    });
+
+    await session.save();
+
+    // Update student availability to matched
+    await StudentAvailability.findByIdAndUpdate(availabilityId, {
+      status: 'matched',
+      sessionId: session._id,
+      matchedAt: new Date()
+    });
+
+    console.log(`✅ Created immediate session ${session._id} with conflict-free teacher ${selectedTeacher.teacherId}`);
+    return session;
+
+  } catch (error) {
+    console.error('❌ Error creating immediate session:', error);
+    throw error;
+  }
+}
+
 // Function to analyze message with GPT-4o
 async function analyzeAvailabilityMessage(message, userRole) {
   try {
@@ -124,6 +233,182 @@ function getNextDateForDay(dayName) {
   return targetDate.toISOString().split('T')[0];
 }
 
+async function findAvailableTeacherForTimeSlot(day, startTime, endTime, subject) {
+  try {
+    console.log(`🔍 Finding available teacher for ${day} ${startTime}-${endTime}, subject: ${subject}`);
+    
+    // Get all teachers who have availability at this time
+    const teacherAvailabilities = await TeacherAvailability.find({});
+    const availableTeachers = [];
+    
+    for (const teacherAvail of teacherAvailabilities) {
+      // Check if teacher has availability at this time
+      const hasTimeSlot = teacherAvail.availability.some(slot => {
+        return hasTimeOverlap(
+          { day, startTime, endTime },
+          { day: slot.day, startTime: slot.startTime, endTime: slot.endTime }
+        );
+      });
+      
+      if (hasTimeSlot) {
+        // Check if teacher has no conflicts at this time
+        const conflictCheck = await checkTeacherConflicts(
+          teacherAvail.teacherId,
+          day,
+          startTime,
+          endTime
+        );
+        
+        if (!conflictCheck.hasConflict) {
+          availableTeachers.push({
+            teacherId: teacherAvail.teacherId,
+            availability: teacherAvail.availability
+          });
+        } else {
+          console.log(`❌ Teacher ${teacherAvail.teacherId} has conflict:`, conflictCheck.conflictingSession);
+        }
+      }
+    }
+    
+    console.log(`✅ Found ${availableTeachers.length} available teachers`);
+    return availableTeachers;
+    
+  } catch (error) {
+    console.error('❌ Error finding available teacher:', error);
+    return [];
+  }
+}
+
+async function checkTeacherConflicts(teacherId, day, startTime, endTime, excludeSessionId = null) {
+  try {
+    console.log(`🔍 Checking teacher ${teacherId} conflicts for ${day} ${startTime}-${endTime}`);
+    
+    const query = {
+      teacherId: teacherId,
+      status: { $in: ['scheduled', 'active'] },
+      'schedule.day': normalizeDayName(day)
+    };
+    
+    // Exclude current session if updating
+    if (excludeSessionId) {
+      query._id = { $ne: excludeSessionId };
+    }
+    
+    const conflictingSessions = await Session.find(query);
+    
+    for (const session of conflictingSessions) {
+      const sessionSlot = {
+        day: session.schedule.day,
+        startTime: session.schedule.startTime,
+        endTime: session.schedule.endTime
+      };
+      
+      const requestedSlot = {
+        day: normalizeDayName(day),
+        startTime,
+        endTime
+      };
+      
+      if (hasTimeOverlap(sessionSlot, requestedSlot)) {
+        console.log(`❌ Teacher conflict found with session ${session._id}`);
+        return {
+          hasConflict: true,
+          conflictingSession: {
+            id: session._id,
+            topic: session.topic,
+            schedule: session.schedule,
+            studentCount: session.studentIds.length
+          }
+        };
+      }
+    }
+    
+    console.log(`✅ No teacher conflicts found`);
+    return { hasConflict: false };
+    
+  } catch (error) {
+    console.error('❌ Error checking teacher conflicts:', error);
+    return { hasConflict: false }; // Default to no conflict if error
+  }
+}
+
+async function updateSessionWithNewStudent(existingSession, newStudentId, newAvailabilityId, allAvailabilities, teacherAvailabilities) {
+  try {
+    console.log(`🔄 Updating session ${existingSession._id} with new student ${newStudentId}`);
+    
+    // Find optimal timing considering all students in the session
+    const optimalTiming = await findOptimalTiming(allAvailabilities, teacherAvailabilities, existingSession.topic);
+    
+    if (!optimalTiming || !optimalTiming.optimalSlot) {
+      throw new Error('Could not find optimal timing for all students');
+    }
+
+    const { optimalSlot, availableStudents, teacherId } = optimalTiming;
+    
+    // Update session with new timing and students
+    existingSession.schedule = {
+      day: optimalSlot.day,
+      startTime: optimalSlot.startTime,
+      endTime: optimalSlot.endTime,
+      date: optimalSlot.date,
+      timezone: 'UTC'
+    };
+    
+    // Add new student if not already in the session
+    if (!existingSession.studentIds.includes(newStudentId)) {
+      existingSession.studentIds.push(newStudentId);
+    }
+    
+    // Update format based on student count
+    existingSession.preferences.format = existingSession.studentIds.length > 1 ? 'group' : 'individual';
+    existingSession.preferences.duration = calculateDuration(optimalSlot.startTime, optimalSlot.endTime);
+    
+    // Update teacher if needed (use the one that's most available)
+    if (teacherId && teacherId !== existingSession.teacherId.toString()) {
+      existingSession.teacherId = teacherId;
+    }
+
+    await existingSession.save();
+
+    // Update new student's availability to matched
+    await StudentAvailability.findByIdAndUpdate(newAvailabilityId, {
+      status: 'matched',
+      sessionId: existingSession._id,
+      matchedAt: new Date()
+    });
+
+    console.log(`✅ Updated session ${existingSession._id} with optimal timing for ${existingSession.studentIds.length} students`);
+    return existingSession;
+
+  } catch (error) {
+    console.error('❌ Error updating session with new student:', error);
+    throw error;
+  }
+}
+
+function isCompatibleWithSessionTimeframe(studentAvailability, sessionSchedule, toleranceMinutes = 60) {
+  for (const slot of studentAvailability) {
+    // Check if same day
+    if (normalizeDayName(slot.day) !== normalizeDayName(sessionSchedule.day)) {
+      continue;
+    }
+
+    const slotStart = timeToMinutes(slot.startTime);
+    const slotEnd = timeToMinutes(slot.endTime);
+    const sessionStart = timeToMinutes(sessionSchedule.startTime);
+    const sessionEnd = timeToMinutes(sessionSchedule.endTime);
+
+    // Check if there's any overlap or they're within tolerance
+    const hasOverlap = slotStart < sessionEnd && slotEnd > sessionStart;
+    const isNearby = Math.abs(slotStart - sessionStart) <= toleranceMinutes || 
+                     Math.abs(slotEnd - sessionEnd) <= toleranceMinutes;
+
+    if (hasOverlap || isNearby) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Function to normalize subject for better matching
 function normalizeSubject(subject) {
@@ -362,8 +647,7 @@ function hasTimeOverlap(slot1, slot2) {
   return hasOverlap;
 }
 
-// Fixed handleStudentAvailability function with better error handling
-async function handleStudentAvailability(user, analysis) {
+async function handleStudentAvailabilityEnhanced(user, analysis) {
   if (!analysis.subject) {
     return {
       message: "Please specify what subject you want to learn along with your availability.",
@@ -372,12 +656,14 @@ async function handleStudentAvailability(user, analysis) {
   }
 
   try {
-    console.log(`\n📝 === HANDLING STUDENT AVAILABILITY ===`);
+    console.log(`\n📝 === ENHANCED STUDENT AVAILABILITY HANDLING ===`);
     console.log(`Student: ${user._id}`);
     console.log(`Subject: ${analysis.subject}`);
     console.log(`Availability:`, analysis.availability);
     
-    // NEW: Check if student is already enrolled for this subject/time
+    const normalizedSubject = normalizeSubject(analysis.subject);
+    
+    // Check if student is already enrolled for this subject/time
     const enrollmentCheck = await checkStudentEnrollment(
       user._id,
       analysis.subject,
@@ -394,132 +680,141 @@ async function handleStudentAvailability(user, analysis) {
       };
     }
 
-    console.log(`✅ Student not enrolled in any conflicting sessions, proceeding...`);
-    
-    // Store student availability FIRST
-    const availability = await storeStudentAvailability(
+    // Store student availability
+    const studentAvailability = await storeStudentAvailability(
       user._id,
       analysis.subject,
       analysis.availability,
       analysis.preferences
     );
 
-    console.log(`📝 Student availability stored with ID: ${availability._id}`);
+    console.log(`📝 Student availability stored with ID: ${studentAvailability._id}`);
 
-    // PRIORITY 1: Check if student can join existing sessions
-    console.log(`\n🔍 === CHECKING EXISTING SESSIONS ===`);
-    const compatibleSessions = await checkExistingSessionsForStudent(
-      user._id,
-      analysis.subject,
-      analysis.availability
-    );
-
-    console.log(`🎯 Compatible sessions found: ${compatibleSessions.length}`);
-
-    // If there are compatible existing sessions, try to enroll in the best one
-    if (compatibleSessions.length > 0) {
-      console.log(`\n✅ === ENROLLING IN EXISTING SESSION ===`);
-      
-      // Try each compatible session in order of preference
-      for (let i = 0; i < compatibleSessions.length; i++) {
-        const sessionInfo = compatibleSessions[i];
-        console.log(`Attempting to enroll in session ${i + 1}/${compatibleSessions.length}: ${sessionInfo.sessionId}`);
-        
-        try {
-          const enrolledSession = await enrollStudentInSession(
-            sessionInfo.sessionId,
-            user._id,
-            availability._id
-          );
-          
-          console.log(`✅ Successfully enrolled in session ${enrolledSession._id}`);
-          console.log(`Session now has ${enrolledSession.studentIds.length} students`);
-          
-          return {
-            message: `Perfect! I've enrolled you in an existing ${analysis.subject} session scheduled for ${enrolledSession.schedule.day} ${enrolledSession.schedule.startTime}-${enrolledSession.schedule.endTime}. You'll join ${enrolledSession.studentIds.length - 1} other students.`,
-            analysis,
-            availability: availability._id,
-            enrolledInExisting: true,
-            session: {
-              id: enrolledSession._id,
-              topic: enrolledSession.topic,
-              schedule: enrolledSession.schedule,
-              studentCount: enrolledSession.studentIds.length
-            }
-          };
-          
-        } catch (enrollError) {
-          console.log(`❌ Could not enroll in session ${sessionInfo.sessionId}: ${enrollError.message}`);
-          console.log(`Trying next compatible session...`);
-          continue; // Try next session
-        }
-      }
-      
-      // If we get here, all enrollment attempts failed
-      console.log('❌ Failed to enroll in any compatible sessions, continuing to new session creation...');
-      
-      // Reset availability status back to pending since enrollment failed
-      await StudentAvailability.findByIdAndUpdate(availability._id, {
-        status: 'pending',
-        $unset: { sessionId: 1, matchedAt: 1 }
-      });
-      
-    } else {
-      console.log(`\n❌ No compatible existing sessions found`);
-    }
-
-    // PRIORITY 2: Only create new sessions if no existing sessions are available
-    console.log(`\n🆕 === CREATING NEW SESSIONS ===`);
-    console.log(`No existing sessions available. Checking if we can create new sessions...`);
-    
-    // Check how many students are waiting for this subject (including current student)
-    const totalWaitingStudents = await StudentAvailability.countDocuments({
-      subject: normalizeSubject(analysis.subject),
-      status: 'pending'
+    // STEP 1: Check existing sessions for SAME SUBJECT
+    const existingSameSessions = await Session.find({
+      topic: normalizedSubject,
+      status: { $in: ['scheduled', 'active'] }
     });
 
-    console.log(`📊 Total students waiting for ${analysis.subject}: ${totalWaitingStudents}`);
+    console.log(`🔍 Found ${existingSameSessions.length} existing sessions for ${normalizedSubject}`);
 
-    // Only try to create new sessions if we have enough students
-    if (totalWaitingStudents >= 3) {
-      console.log(`✅ Sufficient students (${totalWaitingStudents}) for new session creation`);
-      const createdSessions = await checkAndCreateSessions(analysis.subject);
-      
-      let response = {
-        message: `Great! I've recorded your availability for ${analysis.subject}.`,
-        analysis,
-        availability: availability._id,
-        sessionsCreated: createdSessions.length,
-        enrolledInExisting: false
-      };
+    // Try to join compatible existing session for SAME SUBJECT
+    for (const session of existingSameSessions) {
+      const isCompatible = isCompatibleWithSessionTimeframe(
+        analysis.availability, 
+        session.schedule, 
+        60 // 60 minutes tolerance
+      );
 
-      if (createdSessions.length > 0) {
-        response.message += ` Excellent! I created ${createdSessions.length} new session(s) with ${totalWaitingStudents} students.`;
-        response.sessions = createdSessions.map(session => ({
-          id: session._id,
-          topic: session.topic,
-          schedule: session.schedule,
-          studentCount: session.studentIds.length
-        }));
-      } else {
-        response.message += ` Currently ${totalWaitingStudents} students are waiting for ${analysis.subject}. We'll create sessions when we have compatible schedules with teachers!`;
+      if (isCompatible && !session.studentIds.includes(user._id)) {
+        console.log(`✅ Found compatible same-subject session`);
+        
+        // Get all students' availabilities + new student
+        const allStudentAvailabilities = await StudentAvailability.find({
+          studentId: { $in: [...session.studentIds, user._id] },
+          subject: normalizedSubject,
+          status: { $in: ['matched', 'pending'] }
+        });
+
+        const teacherAvailabilities = await TeacherAvailability.find({});
+        const updatedSession = await updateSessionWithNewStudent(
+          session,
+          user._id,
+          studentAvailability._id,
+          allStudentAvailabilities,
+          teacherAvailabilities
+        );
+
+        return {
+          message: `Perfect! I've added you to an existing ${analysis.subject} session. The session is now scheduled for ${updatedSession.schedule.day} ${updatedSession.schedule.startTime}-${updatedSession.schedule.endTime} with ${updatedSession.studentIds.length} students total.`,
+          analysis,
+          availability: studentAvailability._id,
+          sessionUpdated: true,
+          session: {
+            id: updatedSession._id,
+            topic: updatedSession.topic,
+            schedule: updatedSession.schedule,
+            studentCount: updatedSession.studentIds.length
+          }
+        };
       }
-
-      return response;
-    } else {
-      console.log(`❌ Not enough students (${totalWaitingStudents}) for new session`);
-      return {
-        message: `Great! I've recorded your availability for ${analysis.subject}. Currently ${totalWaitingStudents} students are waiting. We'll create sessions when we have more students or find compatible existing sessions!`,
-        analysis,
-        availability: availability._id,
-        sessionsCreated: 0,
-        enrolledInExisting: false
-      };
     }
 
+    // STEP 2: Check if requested time conflicts with OTHER SUBJECT sessions
+    for (const requestedSlot of analysis.availability) {
+      const availableTeachers = await findAvailableTeacherForTimeSlot(
+        requestedSlot.day,
+        requestedSlot.startTime,
+        requestedSlot.endTime,
+        analysis.subject
+      );
+
+      if (availableTeachers.length === 0) {
+        // Find what sessions are conflicting
+        const allSessions = await Session.find({
+          status: { $in: ['scheduled', 'active'] },
+          'schedule.day': normalizeDayName(requestedSlot.day)
+        });
+
+        const conflictingSessions = allSessions.filter(session => {
+          return hasTimeOverlap(requestedSlot, {
+            day: session.schedule.day,
+            startTime: session.schedule.startTime,
+            endTime: session.schedule.endTime
+          });
+        });
+
+        if (conflictingSessions.length > 0) {
+          const conflictInfo = conflictingSessions.map(s => 
+            `${s.topic} (${s.schedule.startTime}-${s.schedule.endTime})`
+          ).join(', ');
+
+          return {
+            message: `I'd love to create a ${analysis.subject} session for ${requestedSlot.day} ${requestedSlot.startTime}-${requestedSlot.endTime}, but our teacher is already teaching: ${conflictInfo}. Please choose a different time slot or join an existing session if available.`,
+            analysis,
+            availability: studentAvailability._id,
+            conflict: true,
+            conflictingSessions: conflictingSessions.map(s => ({
+              topic: s.topic,
+              schedule: s.schedule,
+              studentCount: s.studentIds.length
+            }))
+          };
+        }
+      }
+    }
+
+    // STEP 3: Create new session (only if no conflicts)
+    console.log(`\n🆕 No conflicts found. Creating new session...`);
+    
+    const newSession = await createImmediateSession(
+      user._id,
+      analysis.subject,
+      analysis.availability,
+      studentAvailability._id
+    );
+
+    return {
+      message: `Excellent! I've created a new ${analysis.subject} session for you scheduled at ${newSession.schedule.day} ${newSession.schedule.startTime}-${newSession.schedule.endTime}. As more students join, I'll optimize the timing to accommodate everyone.`,
+      analysis,
+      availability: studentAvailability._id,
+      sessionCreated: true,
+      session: {
+        id: newSession._id,
+        topic: newSession.topic,
+        schedule: newSession.schedule,
+        studentCount: newSession.studentIds.length
+      }
+    };
+
   } catch (error) {
-    console.error('❌ Error handling student availability:', error);
-    throw error;
+    console.error('❌ Error in enhanced student availability handling:', error);
+    
+    return {
+      message: `I've recorded your availability for ${analysis.subject}. ${error.message}`,
+      analysis,
+      error: error.message
+    };
   }
 }
 
@@ -817,11 +1112,9 @@ You are a smart scheduling assistant. Analyze the following data and extract via
 
 IMPORTANT RULES:
 - Find time slots where multiple students are available for the same subject
-- Include ALL students available at each time slot (not just 4)
 - Students must be from the same subject
-- All participants (students + teacher) must be available at the same time slot
-- Prioritize time slots with maximum student overlap
 - Return sessions in the exact JSON format specified
+- Include time slots even if they might have teacher conflicts (we'll check conflicts separately)
 
 STUDENT AVAILABILITIES:
 ${JSON.stringify(studentAvailabilities, null, 2)}
@@ -830,7 +1123,7 @@ TEACHER AVAILABILITIES:
 ${JSON.stringify(teacherAvailabilities, null, 2)}
 
 REQUIRED OUTPUT FORMAT:
-Return a JSON array of viable NEW sessions in this exact format:
+Return a JSON array of viable NEW sessions:
 [
   {
     "subject": "subject_name",
@@ -841,18 +1134,13 @@ Return a JSON array of viable NEW sessions in this exact format:
     "students": [
       {
         "studentId": "id1",
-        "name": "student_name",
-        "availability": [...],
         "availabilityId": "availability_record_id"
       }
-      // ... ALL students available at this time slot (include everyone who can attend)
     ],
     "teacherId": "teacher_id"
   }
 ]
 
-CRITICAL: Include ALL students who are available at each time slot. Do not limit to 4 students.
-Find time slots with maximum student overlap and include everyone who can attend.
 Only return valid JSON, no explanations.
 `;
 
@@ -860,20 +1148,31 @@ Only return valid JSON, no explanations.
     const response = await callAIService(prompt, openai);
     const viableSessions = JSON.parse(response);
     
-    // FIXED: Remove the filter that was limiting to 4+ students
-    // Now we'll create sessions with any number of students (2+)
-    const validSessions = viableSessions.filter(session => 
-      session.students && session.students.length >= 3 // Minimum 2 for a group session
-    );
+    // Filter sessions that have teacher conflicts
+    const conflictFreeSessions = [];
     
-    console.log(`✓ AI found ${validSessions.length} viable NEW sessions with all available students`);
+    for (const session of viableSessions) {
+      if (session.students && session.students.length >= 2) {
+        // Check if teacher has conflicts at this time
+        const conflictCheck = await checkTeacherConflicts(
+          session.teacherId,
+          session.day,
+          session.startTime,
+          session.endTime
+        );
+        
+        if (!conflictCheck.hasConflict) {
+          conflictFreeSessions.push(session);
+          console.log(`✅ Session viable: ${session.subject} on ${session.day} with ${session.students.length} students`);
+        } else {
+          console.log(`❌ Session skipped due to teacher conflict: ${session.subject} on ${session.day}`);
+        }
+      }
+    }
     
-    // Log student counts for debugging
-    validSessions.forEach((session, index) => {
-      console.log(`Session ${index + 1}: ${session.subject} - ${session.students.length} students`);
-    });
+    console.log(`✓ Found ${conflictFreeSessions.length} conflict-free sessions out of ${viableSessions.length} total`);
+    return conflictFreeSessions;
     
-    return validSessions;
   } catch (error) {
     console.error('❌ Error processing AI response:', error);
     return [];
@@ -1018,53 +1317,25 @@ export async function POST(req) {
     if (analysis.intent === 'availability_submission' && analysis.availability) {
       
       if (user.role === 'student') {
-        const result = await handleStudentAvailability(user, analysis);
-        
-        // ONLY process remaining students if current student didn't join an existing session
-        if (!result.enrolledInExisting) {
-          setTimeout(async () => {
-            console.log('⏰ Processing remaining students after new availability submission...');
-            await processRemainingStudents();
-          }, 2000); // Longer delay to ensure current transaction completes
-        } else {
-          console.log('✅ Student enrolled in existing session, skipping background processing');
-        }
-        
+        // Use the enhanced handling function
+        const result = await handleStudentAvailabilityEnhanced(user, analysis);
         return NextResponse.json(result);
 
       } else if (user.role === 'teacher') {
-        // Handle teacher availability
+        // Handle teacher availability (keep existing logic)
         const availability = await storeTeacherAvailability(user._id, analysis.availability);
         
-        // First, try to match with existing pending students
+        // Process any pending students who might now be matchable
         setTimeout(async () => {
           console.log('⏰ Processing students after teacher availability...');
           await processRemainingStudents();
         }, 1000);
         
-        // Then create new sessions if needed
-        const createdSessions = await checkAndCreateSessions();
-
-        let response = {
-          message: "Great! I've recorded your teaching availability.",
+        return NextResponse.json({
+          message: "Great! I've recorded your teaching availability. I'll match you with students and create sessions as they become available.",
           analysis,
-          availability: availability._id,
-          sessionsCreated: createdSessions.length
-        };
-
-        if (createdSessions.length > 0) {
-          response.message += ` Perfect! I created ${createdSessions.length} session(s) with all available students.`;
-          response.sessions = createdSessions.map(session => ({
-            id: session._id,
-            topic: session.topic,
-            schedule: session.schedule,
-            studentCount: session.studentIds.length
-          }));
-        } else {
-          response.message += ` I'll match you with students as they become available.`;
-        }
-
-        return NextResponse.json(response);
+          availability: availability._id
+        });
       }
     }
 
