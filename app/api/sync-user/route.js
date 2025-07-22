@@ -65,9 +65,5 @@ export async function POST(req) {
 
     } catch (error) {
         console.error('User sync error:', error);
-        return NextResponse.json(
-            { error: error.message || 'Internal server error' },
-            { status: 500 }
-        );
     }
 }
