@@ -6,7 +6,8 @@ export async function POST(req) {
     try {
         await connectDB();
         const { clerkId, userName, email, firstName, lastName, profileImage, role, metadata } = await req.json();
-
+        console.log(clerkId);
+        
         if (!clerkId) {
             return NextResponse.json(
                 { error: 'Clerk ID is required' },
@@ -37,16 +38,35 @@ export async function POST(req) {
         if (userName) updateData.userName = userName;
         if (profileImage) updateData.profileImage = profileImage;
 
-        // Update or create user
-        const user = await User.findOneAndUpdate(
-            { clerkId },
-            updateData,
-            { 
-                upsert: true,
-                new: true,
-                setDefaultsOnInsert: true
-            }
-        );
+        // First, try to find existing user by clerkId OR email
+        let user = await User.findOne({
+            $or: [
+                { clerkId },
+                { email }
+            ]
+        });
+        console.log(user);
+        
+        if (user) {
+            // Update existing user
+            user = await User.findByIdAndUpdate(
+                user._id,
+                {
+                    ...updateData,
+                    clerkId // Ensure clerkId is updated in case user was found by email
+                },
+                { 
+                    new: true,
+                    runValidators: true
+                }
+            );
+        } else {
+            // Create new user
+            user = await User.create({
+                clerkId,
+                ...updateData
+            });
+        }
 
         return NextResponse.json({
             success: true,
@@ -65,5 +85,9 @@ export async function POST(req) {
 
     } catch (error) {
         console.error('User sync error:', error);
+        return NextResponse.json(
+            { error: error.message || 'Internal server error' },
+            { status: 500 }
+        );
     }
 }
